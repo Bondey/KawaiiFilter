@@ -33,7 +33,6 @@ AddService          = %ServiceName%,,MiniFilter.Service
 
 [DefaultUninstall.NTamd64]
 LegacyUninstall=1
-DelFiles   = MiniFilter.DriverFiles
 
 
 [DefaultUninstall.NTamd64.Services]
