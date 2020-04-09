@@ -19,12 +19,15 @@ Environment:
 
 #pragma prefast(disable:__WARNING_ENCODE_MEMBER_FUNCTION_POINTER, "Not valid for kernel mode drivers")
 
+PFLT_PORT FilterPort;
+PFLT_PORT SendClientPort;
 
 PFLT_FILTER gFilterHandle;
 ULONG_PTR OperationStatusCtx = 1;
 
 #define PTDBG_TRACE_ROUTINES            0x00000001
 #define PTDBG_TRACE_OPERATION_STATUS    0x00000002
+#define DRIVER_TAG 'Kawi'
 
 ULONG gTraceFlags = 0;
 
@@ -40,6 +43,13 @@ extern "C" NTSTATUS ZwQueryInformationProcess(
     _Out_ PVOID ProcessInformation,
     _In_ ULONG ProcessInformationLength,
     _Out_opt_ PULONG ReturnLength);
+
+
+struct KawaiiFSOperation {
+    USHORT Operation;
+    USHORT FileNameLength;
+    WCHAR FileName[1];
+};
 
 
 
@@ -183,6 +193,35 @@ VOID KawaiiFilterInstanceTeardownComplete ( _In_ PCFLT_RELATED_OBJECTS FltObject
 }
 
 
+_Use_decl_annotations_
+NTSTATUS PortConnectNotify(
+    PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID ConnectionContext, ULONG SizeOfContext, PVOID* ConnectionPortCookie) 
+{
+    UNREFERENCED_PARAMETER(ServerPortCookie);
+    UNREFERENCED_PARAMETER(ConnectionContext);
+    UNREFERENCED_PARAMETER(SizeOfContext);
+    UNREFERENCED_PARAMETER(ConnectionPortCookie);
+    SendClientPort = ClientPort;
+    return STATUS_SUCCESS;
+}
+
+void PortDisconnectNotify(PVOID ConnectionCookie) 
+{
+    UNREFERENCED_PARAMETER(ConnectionCookie);
+    FltCloseClientPort(gFilterHandle, &SendClientPort);
+    SendClientPort = nullptr;
+}
+
+NTSTATUS PortMessageNotify( PVOID PortCookie, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength, PULONG ReturnOutputBufferLength) 
+{
+    UNREFERENCED_PARAMETER(PortCookie);
+    UNREFERENCED_PARAMETER(InputBuffer);
+    UNREFERENCED_PARAMETER(InputBufferLength);
+    UNREFERENCED_PARAMETER(OutputBuffer);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    UNREFERENCED_PARAMETER(ReturnOutputBufferLength);
+    return STATUS_SUCCESS;
+}
 /*************************************************************************
     MiniFilter initialization and unload routines.
 *************************************************************************/
@@ -193,6 +232,8 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
 
     UNREFERENCED_PARAMETER( RegistryPath );
 
+
+  
     PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
                   ("KawaiiFilter!DriverEntry: Entered\n") );
 
@@ -207,6 +248,20 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
     FLT_ASSERT( NT_SUCCESS( status ) );
 
     if (NT_SUCCESS( status )) {
+
+        //
+        //  Ring 3 communication port   
+        //
+
+        UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\FileBackupPort");
+        PSECURITY_DESCRIPTOR sd;
+        status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
+        OBJECT_ATTRIBUTES attr;
+        InitializeObjectAttributes(&attr, &name,
+            OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, nullptr, sd);
+        status = FltCreateCommunicationPort(gFilterHandle, &FilterPort, &attr,
+            nullptr, PortConnectNotify, PortDisconnectNotify, PortMessageNotify, 1);
+        FltFreeSecurityDescriptor(sd);
 
         //
         //  Start filtering i/o
@@ -232,6 +287,7 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
     PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
                   ("KawaiiFilter!KawaiiFilterUnload: Entered\n") );
 
+    FltCloseCommunicationPort(FilterPort);
     FltUnregisterFilter( gFilterHandle );
 
     return STATUS_SUCCESS;
@@ -362,6 +418,25 @@ BOOLEAN KawaiiFilterDoRequestOperationStatus( _In_ PFLT_CALLBACK_DATA Data )
              );
 }
 
+void SendRing3Message(UNICODE_STRING* FileName, UNICODE_STRING* ProcressName, USHORT Operation) {
+    UNREFERENCED_PARAMETER(ProcressName);
+    if (SendClientPort) {
+        USHORT nameLen = FileName->Length;
+        USHORT len = sizeof(KawaiiFSOperation) + nameLen;
+        auto msg = (KawaiiFSOperation*)ExAllocatePoolWithTag(PagedPool, len, DRIVER_TAG);
+        if (msg) {
+            msg->FileNameLength = nameLen / sizeof(WCHAR);
+            msg->Operation = Operation;
+            RtlCopyMemory(msg->FileName, FileName->Buffer, nameLen);
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, msg, len, nullptr, nullptr, &timeout);
+            ExFreePool(msg);
+        }
+    }
+
+}
+
 FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
@@ -387,6 +462,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ 
     if (NT_SUCCESS(status)) {
         // proc y file name
         KdPrint(("Create on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 0);
     }
     ExFreePool(processName);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -413,6 +489,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PC
         RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
         status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
         KdPrint(("Read on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 1);
     }
     ExFreePool(processName);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -440,6 +517,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ P
         RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
         status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
         KdPrint(("Write on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 2);
     }
     ExFreePool(processName);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -480,6 +558,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Dat
         RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
         status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
         KdPrint(("SetInformation on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 3);
     }
     ExFreePool(processName);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;

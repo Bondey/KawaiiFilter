@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.29926.136
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KawaiiFilter", "KawaiiFilter\KawaiiFilter.vcxproj", "{087BA2E6-2135-4352-9CFB-FB17594DB91C}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KawaiiAgent", "KawaiiAgent\KawaiiAgent.vcxproj", "{8784554D-AF1A-4759-9097-024AAC252D16}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM = Debug|ARM
@@ -41,6 +43,18 @@ Global
 		{087BA2E6-2135-4352-9CFB-FB17594DB91C}.Release|x86.ActiveCfg = Release|Win32
 		{087BA2E6-2135-4352-9CFB-FB17594DB91C}.Release|x86.Build.0 = Release|Win32
 		{087BA2E6-2135-4352-9CFB-FB17594DB91C}.Release|x86.Deploy.0 = Release|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|ARM.ActiveCfg = Debug|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|ARM64.ActiveCfg = Debug|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|x64.ActiveCfg = Debug|x64
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|x64.Build.0 = Debug|x64
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|x86.ActiveCfg = Debug|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Debug|x86.Build.0 = Debug|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|ARM.ActiveCfg = Release|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|ARM64.ActiveCfg = Release|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|x64.ActiveCfg = Release|x64
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|x64.Build.0 = Release|x64
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|x86.ActiveCfg = Release|Win32
+		{8784554D-AF1A-4759-9097-024AAC252D16}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
