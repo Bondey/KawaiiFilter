@@ -74,8 +74,8 @@ FLT_PREOP_CALLBACK_STATUS KawaiiFilterPreOperationNoPostOperation ( _Inout_ PFLT
 BOOLEAN KawaiiFilterDoRequestOperationStatus( _In_ PFLT_CALLBACK_DATA Data );
 
 FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-//FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-//FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
+FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
+FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
 FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
 
 EXTERN_C_END
@@ -99,8 +99,8 @@ EXTERN_C_END
 
 CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
     { IRP_MJ_CREATE, 0, KawaiiPreCreate, nullptr },
-    //{ IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, KawaiiPreRead, nullptr },
-    //{ IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, KawaiiPreWrite, nullptr },
+    { IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, KawaiiPreRead, nullptr },
+    { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, KawaiiPreWrite, nullptr },
     { IRP_MJ_SET_INFORMATION, 0, KawaiiPreSetInformation, nullptr },
     { IRP_MJ_OPERATION_END }
 };
@@ -392,6 +392,59 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
+FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext) {
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(FltObjects);
+    // set fake content: https://docs.microsoft.com/en-us/windows-hardware/drivers/ifs/flt-parameters-for-irp-mj-read
+    if (Data->RequestorMode == KernelMode)
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    // what process did this originate from?
+    auto process = PsGetThreadProcess(Data->Thread);
+    NT_ASSERT(process); // cannot really fail
+    HANDLE hProcess;
+    auto status = ObOpenObjectByPointer(process, OBJ_KERNEL_HANDLE, nullptr, 0, nullptr, KernelMode, &hProcess);
+    if (!NT_SUCCESS(status))
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    auto size = 300;
+    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
+    if (processName) {
+        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
+        status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
+        KdPrint(("Read on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+    }
+    ExFreePool(processName);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+}
+
+FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext) {
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(FltObjects);
+    // set fake content: https://docs.microsoft.com/en-us/windows-hardware/drivers/ifs/flt-parameters-for-irp-mj-write
+    if (Data->RequestorMode == KernelMode)
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    // what process did this originate from?
+    auto process = PsGetThreadProcess(Data->Thread);
+    NT_ASSERT(process); // cannot really fail
+    HANDLE hProcess;
+    auto status = ObOpenObjectByPointer(process, OBJ_KERNEL_HANDLE, nullptr, 0, nullptr, KernelMode, &hProcess);
+    if (!NT_SUCCESS(status))
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    auto size = 300;
+    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
+    if (processName) {
+        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
+        status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
+        KdPrint(("Write on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
+    }
+    ExFreePool(processName);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+}
 
 FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
 {
@@ -400,6 +453,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Dat
 
     if (Data->RequestorMode == KernelMode)
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
     BOOLEAN isDel = TRUE;
     auto& params = Data->Iopb->Parameters.SetFileInformation;
     if (params.FileInformationClass != FileDispositionInformation &&
