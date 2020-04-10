@@ -14,7 +14,7 @@ Environment:
 
 --*/
 
-#include <fltKernel.h>
+#include "Common.h"
 #include <dontuse.h>
 
 #pragma prefast(disable:__WARNING_ENCODE_MEMBER_FUNCTION_POINTER, "Not valid for kernel mode drivers")
@@ -43,13 +43,6 @@ extern "C" NTSTATUS ZwQueryInformationProcess(
     _Out_ PVOID ProcessInformation,
     _In_ ULONG ProcessInformationLength,
     _Out_opt_ PULONG ReturnLength);
-
-
-struct KawaiiFSOperation {
-    USHORT Operation;
-    USHORT FileNameLength;
-    WCHAR FileName[1];
-};
 
 
 
@@ -87,6 +80,8 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ 
 FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
 FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
 FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
+
+void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo);
 
 EXTERN_C_END
 
@@ -273,6 +268,15 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
 
             FltUnregisterFilter( gFilterHandle );
         }
+
+        //
+        // proces creation/deletion Callback
+        //
+
+        status = PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, FALSE);
+        if (!NT_SUCCESS(status)) {
+            KdPrint(("Could not create Process Callback (%08X) \n", status));
+        }
     }
     KdPrint(("KawaiiFilter loaded"));
     return status;
@@ -287,12 +291,12 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
     PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
                   ("KawaiiFilter!KawaiiFilterUnload: Entered\n") );
 
+    PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, TRUE);
     FltCloseCommunicationPort(FilterPort);
     FltUnregisterFilter( gFilterHandle );
 
     return STATUS_SUCCESS;
 }
-
 
 /*************************************************************************
     MiniFilter callback routines.
@@ -337,8 +341,6 @@ KawaiiFilterPreOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_O
     return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
-
-
 VOID KawaiiFilterOperationStatusCallback ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PFLT_IO_PARAMETER_BLOCK ParameterSnapshot, _In_ NTSTATUS OperationStatus, _In_ PVOID RequesterContext )
 {
     UNREFERENCED_PARAMETER( FltObjects );
@@ -355,7 +357,6 @@ VOID KawaiiFilterOperationStatusCallback ( _In_ PCFLT_RELATED_OBJECTS FltObjects
                    FltGetIrpName(ParameterSnapshot->MajorFunction)) );
 }
 
-
 FLT_POSTOP_CALLBACK_STATUS KawaiiFilterPostOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_opt_ PVOID CompletionContext, _In_ FLT_POST_OPERATION_FLAGS Flags )
 {
     UNREFERENCED_PARAMETER( Data );
@@ -368,7 +369,6 @@ FLT_POSTOP_CALLBACK_STATUS KawaiiFilterPostOperation ( _Inout_ PFLT_CALLBACK_DAT
 
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
-
 
 FLT_PREOP_CALLBACK_STATUS KawaiiFilterPreOperationNoPostOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID *CompletionContext )
 {
@@ -385,7 +385,6 @@ FLT_PREOP_CALLBACK_STATUS KawaiiFilterPreOperationNoPostOperation ( _Inout_ PFLT
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
-
 
 BOOLEAN KawaiiFilterDoRequestOperationStatus( _In_ PFLT_CALLBACK_DATA Data )
 {
@@ -418,23 +417,86 @@ BOOLEAN KawaiiFilterDoRequestOperationStatus( _In_ PFLT_CALLBACK_DATA Data )
              );
 }
 
-void SendRing3Message(UNICODE_STRING* FileName, UNICODE_STRING* ProcressName, USHORT Operation) {
-    UNREFERENCED_PARAMETER(ProcressName);
-    if (SendClientPort) {
-        USHORT nameLen = FileName->Length;
-        USHORT len = sizeof(KawaiiFSOperation) + nameLen;
-        auto msg = (KawaiiFSOperation*)ExAllocatePoolWithTag(PagedPool, len, DRIVER_TAG);
-        if (msg) {
-            msg->FileNameLength = nameLen / sizeof(WCHAR);
-            msg->Operation = Operation;
-            RtlCopyMemory(msg->FileName, FileName->Buffer, nameLen);
-            LARGE_INTEGER timeout;
-            timeout.QuadPart = -10000 * 100; // 100msec
-            FltSendMessage(gFilterHandle, &SendClientPort, msg, len, nullptr, nullptr, &timeout);
-            ExFreePool(msg);
-        }
-    }
+void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operation) {
 
+    if (SendClientPort) {
+        // Get Process Name
+        auto size = 300;
+        auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
+        if (processName == nullptr){
+            KdPrint(("Failed processName allocation\n"));
+            return;
+        }
+
+        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
+        auto status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
+        if (!NT_SUCCESS(status)){
+            KdPrint(("Failed ZwQueryInformationProcess 1\n"));
+            ExFreePool(processName);
+            return;
+        }
+
+        // Get PID
+        auto basicinfo = (PROCESS_BASIC_INFORMATION*)ExAllocatePool(PagedPool, sizeof(PROCESS_BASIC_INFORMATION));
+        if (processName == nullptr){
+            KdPrint(("Failed basicinfo allocation\n"));
+            ExFreePool(processName);
+            return;
+        }
+        status = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, basicinfo, sizeof(PROCESS_BASIC_INFORMATION), nullptr);
+        if (!NT_SUCCESS(status)){
+            KdPrint(("Failed ZwQueryInformationProcess 2\n"));
+            ExFreePool(processName);
+            ExFreePool(basicinfo);
+            return;
+        }
+
+        // Build data struct
+        USHORT allocSize = sizeof(KawaiiFSOperation);
+        USHORT FileNameSize = 0;
+        USHORT ImageSize = 0;
+
+        if (FileName) {
+            FileNameSize = FileName->Length;
+            allocSize += FileNameSize;
+        }
+
+        if (processName) {
+            ImageSize = processName->Length;
+            allocSize += ImageSize+4;
+        }
+
+        auto msg = (KawaiiFSOperation*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
+        RtlZeroMemory(msg, allocSize);
+        if (msg == nullptr) {
+            ExFreePool(processName);
+            ExFreePool(basicinfo);
+            KdPrint(("Failed kawaii allocation\n"));
+            return;
+        }
+        KeQuerySystemTime(&msg->Time);
+        msg->Type = ItemType::FSactivity;
+        msg->ProcessId = basicinfo->UniqueProcessId;
+        msg->FileNameLength = FileNameSize / sizeof(WCHAR);
+        msg->ProcessLength = ImageSize / sizeof(WCHAR);
+        msg->Operation = Operation;
+
+        // Put strings 
+        ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation), FileName->Buffer, FileNameSize);
+        msg->FileName = sizeof(KawaiiFSOperation);
+        
+        ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation) + FileNameSize+2, processName->Buffer, ImageSize);
+        msg->ProcessName = sizeof(KawaiiFSOperation) + FileNameSize + 2;
+      
+        // Send message
+        LARGE_INTEGER timeout;
+        timeout.QuadPart = -10000 * 100; // 100msec
+        FltSendMessage(gFilterHandle, &SendClientPort, msg, allocSize, nullptr, nullptr, &timeout);
+
+        ExFreePool(msg);
+        ExFreePool(basicinfo);
+        ExFreePool(processName);
+    }
 }
 
 FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
@@ -451,20 +513,13 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ 
         // delete operation
         isDel = TRUE;
     }
-
-    auto size = 300; // some arbitrary size enough for cmd.exe image path
-    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
-    if (processName == nullptr)
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-
-    RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
-    auto status = ZwQueryInformationProcess(NtCurrentProcess(), ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
-    if (NT_SUCCESS(status)) {
-        // proc y file name
-        KdPrint(("Create on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
-        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 0);
+   
+    if (isDel) {
+        SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, NtCurrentProcess(), 4);
+    }else{
+        SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, NtCurrentProcess(), 0);
     }
-    ExFreePool(processName);
+    
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
@@ -483,15 +538,8 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreRead(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PC
     if (!NT_SUCCESS(status))
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
 
-    auto size = 300;
-    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
-    if (processName) {
-        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
-        status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
-        KdPrint(("Read on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
-        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 1);
-    }
-    ExFreePool(processName);
+    SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, hProcess, 1);
+
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 
 }
@@ -511,17 +559,9 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ P
     if (!NT_SUCCESS(status))
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
 
-    auto size = 300;
-    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
-    if (processName) {
-        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
-        status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
-        KdPrint(("Write on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
-        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 2);
-    }
-    ExFreePool(processName);
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, hProcess, 2);
 
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
@@ -552,14 +592,93 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Dat
     if (!NT_SUCCESS(status))
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
 
-    auto size = 300;
-    auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
-    if (processName) {
-        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
-        status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
-        KdPrint(("SetInformation on: %wZ by process: %wZ \n", &Data->Iopb->TargetFileObject->FileName, processName));
-        SendRing3Message(&Data->Iopb->TargetFileObject->FileName, processName, 3);
+    if (isDel) {
+        SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, hProcess, 5);
+    }else{
+        SendFSRing3Message(&Data->Iopb->TargetFileObject->FileName, hProcess, 3);
     }
-    ExFreePool(processName);
+ 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+
+/*************************************************************************
+    Process callback related stuff.
+*************************************************************************/
+
+
+void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
+    UNREFERENCED_PARAMETER(Process);
+
+    if (SendClientPort) {
+        if (CreateInfo) {
+            USHORT allocSize = sizeof(ProcessCreateInfo);
+            USHORT commandLineSize = 0;
+            USHORT ImageSize = 0;
+
+            if (CreateInfo->CommandLine) {
+                commandLineSize = CreateInfo->CommandLine->Length;
+                allocSize += commandLineSize;
+            }
+
+            if (CreateInfo->ImageFileName) {
+                ImageSize = CreateInfo->ImageFileName->Length;
+                allocSize += ImageSize+4;
+            }
+
+            auto item = (ProcessCreateInfo*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
+            if (item == nullptr) {
+                KdPrint(("Failed allocation\n"));
+                return;
+            }
+
+            item->ProcessId = HandleToULong(ProcessId);
+            item->ParentProcessId = HandleToULong(CreateInfo->ParentProcessId);
+            item->Type = ItemType::ProcessCreate;
+            KeQuerySystemTime(&item->Time);
+
+
+            if (commandLineSize > 0) {
+                ::memcpy((UCHAR*)item + sizeof(ProcessCreateInfo), CreateInfo->CommandLine->Buffer, commandLineSize);
+                item->CommandLineLength = commandLineSize / sizeof(WCHAR);
+                item->CommandLineOffset = sizeof(ProcessCreateInfo);
+            }
+            else {
+                item->CommandLineLength = 0;
+            }
+
+            if (ImageSize > 0) {
+                ::memcpy((UCHAR*)item + sizeof(ProcessCreateInfo) + commandLineSize+2, CreateInfo->ImageFileName->Buffer, ImageSize);
+                item->ImageLength = ImageSize / sizeof(WCHAR);
+                item->ImageOffset = sizeof(ProcessCreateInfo) + commandLineSize+2;
+            }
+            else {
+                item->ImageLength = 0;
+            }
+
+            // Send message
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, item, allocSize, nullptr, nullptr, &timeout);
+            ExFreePool(item);
+        }
+        else {
+            auto item = (ProcessExitInfo*)ExAllocatePoolWithTag(PagedPool, sizeof(ProcessExitInfo), DRIVER_TAG);
+            if (item == nullptr) {
+                KdPrint(("Failed allocation\n"));
+                return;
+            }
+            item->Type = ItemType::ProcessExit;
+            KeQuerySystemTime(&item->Time);
+            item->ProcessId = HandleToULong(ProcessId);
+
+            // Send message
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, item, sizeof(ProcessExitInfo), nullptr, nullptr, &timeout);
+            ExFreePool(item);
+
+        }
+    }
+
 }
