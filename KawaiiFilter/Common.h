@@ -1,6 +1,8 @@
 #pragma once
 #include <fltKernel.h>
 
+#define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 enum class ItemType : short {
 	None,
 	FSactivity,
@@ -46,8 +48,10 @@ struct RegistrySetValueInfo : ItemHeader {
 	ULONG DataSize;
 };
 
+/*
 template<typename T>
 struct FullItem {
 	LIST_ENTRY Entry;
 	T Data;
 };
+*/

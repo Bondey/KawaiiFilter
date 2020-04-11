@@ -36,6 +36,7 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="KawaiiFilter.rc" />
+    <ClCompile Include="fastmutex.cpp" />
     <ClCompile Include="KawaiiFilter.cpp" />
     <Inf Include="KawaiiFilter.inf" />
   </ItemGroup>
@@ -185,6 +186,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Common.h" />
+    <ClInclude Include="fastmutex.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

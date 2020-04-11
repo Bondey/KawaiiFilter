@@ -16,12 +16,13 @@ Environment:
 
 #include "Common.h"
 #include <dontuse.h>
+#include "fastmutex.h"
 
 #pragma prefast(disable:__WARNING_ENCODE_MEMBER_FUNCTION_POINTER, "Not valid for kernel mode drivers")
 
 PFLT_PORT FilterPort;
 PFLT_PORT SendClientPort;
-
+FastMutex Mutex;
 PFLT_FILTER gFilterHandle; 
 LARGE_INTEGER gRegHandle;
 
@@ -32,7 +33,7 @@ ULONG_PTR OperationStatusCtx = 1;
 #define DRIVER_TAG 'Kawi'
 
 ULONG gTraceFlags = 0;
-
+BOOLEAN FBP = TRUE;
 
 #define PT_DBG_PRINT( _dbgLevel, _string )          \
     (FlagOn(gTraceFlags,(_dbgLevel)) ?              \
@@ -47,15 +48,52 @@ extern "C" NTSTATUS ZwQueryInformationProcess(
     _Out_opt_ PULONG ReturnLength);
 
 
+/*************************************************************************
+    Monitored PIDs stuff
+*************************************************************************/
+
+const int MaxPids = 256;
+int PidsCount;
+ULONG Pids[MaxPids];
+
+bool AddProcess(ULONG pid) {
+    for (int i = 0; i < MaxPids; i++) {
+        if (Pids[i] == 0) {
+            Pids[i] = pid;
+            PidsCount++;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RemoveProcess(ULONG pid) {
+    for (int i = 0; i < MaxPids; i++) {
+        if (Pids[i] == pid) {
+            Pids[i] = 0;
+            PidsCount--;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool FindProcess(ULONG pid) {
+    for (int i = 0; i < MaxPids; i++)
+        if (Pids[i] == pid)
+            return true;
+    return false;
+}
+
 
 /*************************************************************************
     Prototypes
-
 *************************************************************************/
 
 EXTERN_C_START
 
 DRIVER_INITIALIZE DriverEntry;
+
 NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath );
 
 NTSTATUS KawaiiFilterInstanceSetup ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags, _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType );
@@ -138,8 +176,6 @@ CONST FLT_REGISTRATION FilterRegistration = {
 
 };
 
-
-
 NTSTATUS KawaiiFilterInstanceSetup ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags, _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType )
 {
     UNREFERENCED_PARAMETER( FltObjects );
@@ -155,7 +191,6 @@ NTSTATUS KawaiiFilterInstanceSetup ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_
     return STATUS_SUCCESS;
 }
 
-
 NTSTATUS KawaiiFilterInstanceQueryTeardown ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags )
 {
     UNREFERENCED_PARAMETER( FltObjects );
@@ -169,7 +204,6 @@ NTSTATUS KawaiiFilterInstanceQueryTeardown ( _In_ PCFLT_RELATED_OBJECTS FltObjec
     return STATUS_SUCCESS;
 }
 
-
 VOID KawaiiFilterInstanceTeardownStart ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags )
 {
     UNREFERENCED_PARAMETER( FltObjects );
@@ -180,7 +214,6 @@ VOID KawaiiFilterInstanceTeardownStart ( _In_ PCFLT_RELATED_OBJECTS FltObjects, 
     PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
                   ("KawaiiFilter!KawaiiFilterInstanceTeardownStart: Entered\n") );
 }
-
 
 VOID KawaiiFilterInstanceTeardownComplete ( _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags )
 {
@@ -193,10 +226,11 @@ VOID KawaiiFilterInstanceTeardownComplete ( _In_ PCFLT_RELATED_OBJECTS FltObject
                   ("KawaiiFilter!KawaiiFilterInstanceTeardownComplete: Entered\n") );
 }
 
+/*************************************************************************
+    Ring3 Communication by port.
+*************************************************************************/
 
-_Use_decl_annotations_
-NTSTATUS PortConnectNotify(
-    PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID ConnectionContext, ULONG SizeOfContext, PVOID* ConnectionPortCookie) 
+_Use_decl_annotations_ NTSTATUS PortConnectNotify(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID ConnectionContext, ULONG SizeOfContext, PVOID* ConnectionPortCookie) 
 {
     UNREFERENCED_PARAMETER(ServerPortCookie);
     UNREFERENCED_PARAMETER(ConnectionContext);
@@ -223,32 +257,103 @@ NTSTATUS PortMessageNotify( PVOID PortCookie, PVOID InputBuffer, ULONG InputBuff
     UNREFERENCED_PARAMETER(ReturnOutputBufferLength);
     return STATUS_SUCCESS;
 }
+
 /*************************************************************************
     MiniFilter initialization and unload routines.
 *************************************************************************/
 
+NTSTATUS GenericIRPHandler(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp) 
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS DeviceIOCTLHandler(PDEVICE_OBJECT, PIRP Irp) {
+
+    auto stack = IoGetCurrentIrpStackLocation(Irp);
+    auto status = STATUS_SUCCESS;
+    auto len = 0;
+
+    switch (stack->Parameters.DeviceIoControl.IoControlCode) {
+        case IOCTL_PROCESS_ADDPID:
+        {
+            auto size = stack->Parameters.DeviceIoControl.InputBufferLength;
+            if (size % sizeof(ULONG) != 0) {
+                status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+            auto data = (ULONG*)Irp->AssociatedIrp.SystemBuffer;
+
+            AutoLock<FastMutex> lock(Mutex);
+            for (int i = 0; i < size / sizeof(ULONG); i++) {
+                auto pid = data[i];
+                if (pid == 0) {
+                    status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                if (FindProcess(pid)) {
+                    continue;
+                }
+                if (PidsCount == MaxPids) {
+                    status = STATUS_TOO_MANY_CONTEXT_IDS;
+                    break;
+                }
+
+                if (!AddProcess(pid)) {
+                    status = STATUS_UNSUCCESSFUL;
+                }
+                len += sizeof(ULONG);
+            }
+            break;
+        }
+    }
+
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = len;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return status;
+}
+
 NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath )
 {
     NTSTATUS status;
-
     UNREFERENCED_PARAMETER( RegistryPath );
-
-
-  
-    PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
-                  ("KawaiiFilter!DriverEntry: Entered\n") );
+    PT_DBG_PRINT( PTDBG_TRACE_ROUTINES, ("KawaiiFilter!DriverEntry: Entered\n") );
 
     //
     //  Register with FltMgr to tell it our callback routines
     //
 
-    status = FltRegisterFilter( DriverObject,
-                                &FilterRegistration,
-                                &gFilterHandle );
+    status = FltRegisterFilter( DriverObject, &FilterRegistration, &gFilterHandle );
 
     FLT_ASSERT( NT_SUCCESS( status ) );
 
+    Mutex.Init();
+    AddProcess(2);
+
     if (NT_SUCCESS( status )) {
+
+        // Set IRP Handler
+        DriverObject->MajorFunction[IRP_MJ_CREATE] = GenericIRPHandler;
+        DriverObject->MajorFunction[IRP_MJ_CLOSE] = GenericIRPHandler;
+        DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceIOCTLHandler;
+        // Device creation
+        UNICODE_STRING devName = RTL_CONSTANT_STRING(L"\\Device\\KawaiiDrv");
+        PDEVICE_OBJECT DeviceObject;
+        status = IoCreateDevice(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN, 0, FALSE, &DeviceObject);
+        if (!NT_SUCCESS(status)) 
+            KdPrint(("Could not create device object (%08X) \n", status));
+        // SynLink creation
+        UNICODE_STRING symLink = RTL_CONSTANT_STRING(L"\\??\\KawaiiDrv");
+        status = IoCreateSymbolicLink(&symLink, &devName);
+        if (!NT_SUCCESS(status)) 
+            KdPrint(("Could not create SymLink (%08X) \n", status));
+        
 
         //
         //  Ring 3 communication port   
@@ -258,10 +363,8 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
         PSECURITY_DESCRIPTOR sd;
         status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
         OBJECT_ATTRIBUTES attr;
-        InitializeObjectAttributes(&attr, &name,
-            OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, nullptr, sd);
-        status = FltCreateCommunicationPort(gFilterHandle, &FilterPort, &attr,
-            nullptr, PortConnectNotify, PortDisconnectNotify, PortMessageNotify, 1);
+        InitializeObjectAttributes(&attr, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, nullptr, sd);
+        status = FltCreateCommunicationPort(gFilterHandle, &FilterPort, &attr, nullptr, PortConnectNotify, PortDisconnectNotify, PortMessageNotify, 1);
         FltFreeSecurityDescriptor(sd);
 
         //
@@ -270,31 +373,26 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
 
         status = FltStartFiltering( gFilterHandle );
 
-        if (!NT_SUCCESS( status )) {
-
+        if (!NT_SUCCESS( status )) 
             FltUnregisterFilter( gFilterHandle );
-        }
-
+        
         //
         // proces creation/deletion Callback
         //
 
         status = PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, FALSE);
-        if (!NT_SUCCESS(status)) {
+        if (!NT_SUCCESS(status)) 
             KdPrint(("Could not create Process Callback (%08X) \n", status));
-        }
-
+       
         //
         // registry modification Callback
         //
 
         UNICODE_STRING altitude = RTL_CONSTANT_STRING(L"7659,224");
         status = CmRegisterCallbackEx(OnRegistryNotify, &altitude, DriverObject, nullptr, &gRegHandle, nullptr);
-        if (!NT_SUCCESS(status)) {
+        if (!NT_SUCCESS(status)) 
             KdPrint(("failed to set registry callback (%08X) \n", status));
-            return status;
-        }
-
+        
     }
     KdPrint(("KawaiiFilter loaded"));
     return status;
@@ -320,8 +418,8 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
 /*************************************************************************
     MiniFilter callback routines.
 *************************************************************************/
-FLT_PREOP_CALLBACK_STATUS
-KawaiiFilterPreOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID *CompletionContext )
+
+FLT_PREOP_CALLBACK_STATUS KawaiiFilterPreOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID *CompletionContext )
 {
     NTSTATUS status;
 
@@ -436,6 +534,8 @@ BOOLEAN KawaiiFilterDoRequestOperationStatus( _In_ PFLT_CALLBACK_DATA Data )
              );
 }
 
+// Relevant routines
+
 FLT_PREOP_CALLBACK_STATUS KawaiiPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
@@ -541,82 +641,87 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Dat
 void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operation) {
 
     if (SendClientPort && FileName!= nullptr) {
-        // Get Process Name
-        auto size = 300;
-        auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
-        if (processName == nullptr) {
-            KdPrint(("Failed processName allocation\n"));
-            return;
-        }
-
-        RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
-        auto status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
-        if (!NT_SUCCESS(status)) {
-            KdPrint(("Failed ZwQueryInformationProcess 1\n"));
-            ExFreePool(processName);
-            return;
-        }
 
         // Get PID
         auto basicinfo = (PROCESS_BASIC_INFORMATION*)ExAllocatePool(PagedPool, sizeof(PROCESS_BASIC_INFORMATION));
-        if (processName == nullptr) {
+        if (basicinfo == nullptr) {
             KdPrint(("Failed basicinfo allocation\n"));
-            ExFreePool(processName);
             return;
         }
-        status = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, basicinfo, sizeof(PROCESS_BASIC_INFORMATION), nullptr);
+
+        auto status = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, basicinfo, sizeof(PROCESS_BASIC_INFORMATION), nullptr);
         if (!NT_SUCCESS(status)) {
-            KdPrint(("Failed ZwQueryInformationProcess 2\n"));
-            ExFreePool(processName);
+            KdPrint(("Failed ZwQueryInformationProcess 1\n"));
             ExFreePool(basicinfo);
             return;
         }
+        if (FindProcess((ULONG)basicinfo->UniqueProcessId) || !FBP )
+        {
+            // Get Process Name
+            auto size = 300;
+            auto processName = (UNICODE_STRING*)ExAllocatePool(PagedPool, size);
+            if (processName == nullptr) {
+                ExFreePool(basicinfo);
+                KdPrint(("Failed processName allocation\n"));
+                return;
+            }
 
-        // Build data struct
-        USHORT allocSize = sizeof(KawaiiFSOperation);
-        USHORT FileNameSize = 0;
-        USHORT ImageSize = 0;
+            RtlZeroMemory(processName, size); // ensure string will be NULL-terminated
+            status = ZwQueryInformationProcess(hProcess, ProcessImageFileName, processName, size - sizeof(WCHAR), nullptr);
+            if (!NT_SUCCESS(status)) {
+                KdPrint(("Failed ZwQueryInformationProcess 2\n"));
+                ExFreePool(basicinfo);
+                ExFreePool(processName);
+                return;
+            }
 
-        if (FileName) {
-            FileNameSize = FileName->Length;
-            allocSize += FileNameSize;
-        }
+            // Build data struct
+            USHORT allocSize = sizeof(KawaiiFSOperation);
+            USHORT FileNameSize = 0;
+            USHORT ImageSize = 0;
 
-        if (processName) {
-            ImageSize = processName->Length;
-            allocSize += ImageSize + 4;
-        }
+            if (FileName) {
+                FileNameSize = FileName->Length;
+                allocSize += FileNameSize;
+            }
 
-        auto msg = (KawaiiFSOperation*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
-        RtlZeroMemory(msg, allocSize);
-        if (msg == nullptr) {
+            if (processName) {
+                ImageSize = processName->Length;
+                allocSize += ImageSize + 4;
+            }
+
+            auto msg = (KawaiiFSOperation*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
+            RtlZeroMemory(msg, allocSize);
+            if (msg == nullptr) {
+                ExFreePool(processName);
+                ExFreePool(basicinfo);
+                KdPrint(("Failed kawaii allocation\n"));
+                return;
+            }
+            KeQuerySystemTime(&msg->Time);
+            msg->Type = ItemType::FSactivity;
+            msg->ProcessId = basicinfo->UniqueProcessId;
+            msg->FileNameLength = FileNameSize / sizeof(WCHAR);
+            msg->ProcessLength = ImageSize / sizeof(WCHAR);
+            msg->Operation = Operation;
+
+            // Put strings 
+            ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation), FileName->Buffer, FileNameSize);
+            msg->FileName = sizeof(KawaiiFSOperation);
+
+            ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation) + FileNameSize + 2, processName->Buffer, ImageSize);
+            msg->ProcessName = sizeof(KawaiiFSOperation) + FileNameSize + 2;
+
+            // Send message
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, msg, allocSize, nullptr, nullptr, &timeout);
+
+            ExFreePool(msg);
             ExFreePool(processName);
-            ExFreePool(basicinfo);
-            KdPrint(("Failed kawaii allocation\n"));
-            return;
         }
-        KeQuerySystemTime(&msg->Time);
-        msg->Type = ItemType::FSactivity;
-        msg->ProcessId = basicinfo->UniqueProcessId;
-        msg->FileNameLength = FileNameSize / sizeof(WCHAR);
-        msg->ProcessLength = ImageSize / sizeof(WCHAR);
-        msg->Operation = Operation;
-
-        // Put strings 
-        ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation), FileName->Buffer, FileNameSize);
-        msg->FileName = sizeof(KawaiiFSOperation);
-
-        ::memcpy((UCHAR*)msg + sizeof(KawaiiFSOperation) + FileNameSize + 2, processName->Buffer, ImageSize);
-        msg->ProcessName = sizeof(KawaiiFSOperation) + FileNameSize + 2;
-
-        // Send message
-        LARGE_INTEGER timeout;
-        timeout.QuadPart = -10000 * 100; // 100msec
-        FltSendMessage(gFilterHandle, &SendClientPort, msg, allocSize, nullptr, nullptr, &timeout);
-
-        ExFreePool(msg);
+        
         ExFreePool(basicinfo);
-        ExFreePool(processName);
     }
 }
 
@@ -699,75 +804,75 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 }
 
 /*************************************************************************
-    Process callback related stuff.
+    Registry callback related stuff.
 *************************************************************************/
 
 NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
     UNREFERENCED_PARAMETER(context);
     // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nc-wdm-ex_callback_function
     ULONG Curpid = HandleToULong(PsGetCurrentProcessId());
-    switch ((REG_NOTIFY_CLASS)(ULONG_PTR)Arg1) {
-    case RegNtPostSetValueKey:
-    {
-        auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
-        if (!NT_SUCCESS(args->Status)) {
-            break;
-        }
+    if (FindProcess(Curpid) || !FBP ){
+        switch ((REG_NOTIFY_CLASS)(ULONG_PTR)Arg1) {
+            case RegNtPostSetValueKey:
+            {
+                auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
+                if (!NT_SUCCESS(args->Status))
+                    break;
 
-        PCUNICODE_STRING name;
-        // ME PREOCUPA QUE NO HAY API PARA LIBERAR LA KEY EN WINDOWS 7, ESTOY LEAKEANDO UN HANDLE??
-        if (NT_SUCCESS(CmCallbackGetKeyObjectID(&gRegHandle, args->Object, nullptr, &name))) {
-            auto preInfo = (REG_SET_VALUE_KEY_INFORMATION*)args->PreInformation;
-            NT_ASSERT(preInfo);
-            USHORT size = sizeof(RegistrySetValueInfo);
-            auto item = (RegistrySetValueInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
-            if (item == nullptr || preInfo == nullptr)
+                PCUNICODE_STRING name;
+                // ME PREOCUPA QUE NO HAY API PARA LIBERAR LA KEY EN WINDOWS 7, ESTOY LEAKEANDO UN HANDLE??
+                if (NT_SUCCESS(CmCallbackGetKeyObjectID(&gRegHandle, args->Object, nullptr, &name))) {
+                    auto preInfo = (REG_SET_VALUE_KEY_INFORMATION*)args->PreInformation;
+                    NT_ASSERT(preInfo);
+                    USHORT size = sizeof(RegistrySetValueInfo);
+                    auto item = (RegistrySetValueInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+                    if (item == nullptr || preInfo == nullptr)
+                        break;
+
+                    RtlZeroMemory(item, size);
+
+                    KeQuerySystemTime(&item->Time);
+                    item->Type = ItemType::RegistrySetValue;
+
+                    // get client Pid/Tid 
+                    item->ProcessId = Curpid;
+                    item->ThreadId = HandleToULong(PsGetCurrentThreadId());
+
+                    // get specific key/value data
+                    ::wcsncpy_s(item->KeyName, name->Buffer, name->Length / sizeof(WCHAR) - 1);
+                    ::wcsncpy_s(item->ValueName, preInfo->ValueName->Buffer, preInfo->ValueName->Length / sizeof(WCHAR) - 1);
+
+                    item->DataType = preInfo->Type;
+                    item->DataSize = preInfo->DataSize;
+                    ::memcpy(item->Data, preInfo->Data, min(item->DataSize, sizeof(item->Data)));
+
+                    // Send message
+                    LARGE_INTEGER timeout;
+                    timeout.QuadPart = -10000 * 100; // 100msec
+                    FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+                    ExFreePool(item);
+                }
                 break;
-
-            RtlZeroMemory(item, size);
-
-            KeQuerySystemTime(&item->Time);
-            item->Type = ItemType::RegistrySetValue;
-
-            // get client Pid/Tid 
-            item->ProcessId = Curpid;
-            item->ThreadId = HandleToULong(PsGetCurrentThreadId());
-
-            // get specific key/value data
-            ::wcsncpy_s(item->KeyName, name->Buffer, name->Length / sizeof(WCHAR) - 1);
-            ::wcsncpy_s(item->ValueName, preInfo->ValueName->Buffer, preInfo->ValueName->Length / sizeof(WCHAR) - 1);
-
-            item->DataType = preInfo->Type;
-            item->DataSize = preInfo->DataSize;
-            ::memcpy(item->Data, preInfo->Data, min(item->DataSize, sizeof(item->Data)));
-
-            // Send message
-            LARGE_INTEGER timeout;
-            timeout.QuadPart = -10000 * 100; // 100msec
-            FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
-            ExFreePool(item);
+            }
+            case RegNtPostQueryValueKey:
+            {
+                auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
+                if (!NT_SUCCESS(args->Status)) {
+                    break;
+                }
+                break;
+            }
+            case RegNtPostCreateKey:
+            {
+                auto args = (REG_POST_CREATE_KEY_INFORMATION*)Arg2;
+                if (!NT_SUCCESS(args->Status)) {
+                    break;
+                }
+                break;
+            }
+            default:
+                break;
         }
-        break;
     }
-    case RegNtPostQueryValueKey:
-    {
-        auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
-        if (!NT_SUCCESS(args->Status)) {
-            break;
-        }
-        break;
-    }
-    case RegNtPostCreateKey:
-    {
-        auto args = (REG_POST_CREATE_KEY_INFORMATION*)Arg2;
-        if (!NT_SUCCESS(args->Status)) {
-            break;
-        }
-        break;
-    }
-    default:
-        break;
-    }
-    
     return STATUS_SUCCESS;
 }

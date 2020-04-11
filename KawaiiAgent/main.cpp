@@ -6,6 +6,8 @@
 
 #pragma comment(lib, "fltlib")
 
+#define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 enum class ItemType : short {
 	None,
 	FSactivity,
@@ -51,12 +53,6 @@ struct RegistrySetValueInfo : ItemHeader {
 	ULONG DataSize;
 };
 
-template<typename T>
-struct FullItem {
-	LIST_ENTRY Entry;
-	T Data;
-};
-
 void DisplayTime(const LARGE_INTEGER& time) {
 	SYSTEMTIME st;
 	::FileTimeToSystemTime((FILETIME*)&time, &st);
@@ -73,7 +69,7 @@ void DisplayBinary(const UCHAR* buffer, DWORD size) {
 void HandleMessage(const BYTE* buffer) {
 	auto header = (ItemHeader*)buffer;
 	switch (header->Type) {
-		/**case ItemType::FSactivity:
+		case ItemType::FSactivity:
 		{
 			auto msg = (KawaiiFSOperation*)buffer;
 			USHORT totallen = (USHORT)msg->FileNameLength + 1;
@@ -107,7 +103,8 @@ void HandleMessage(const BYTE* buffer) {
 					printf("\tBy process: %ws with PID %I64d\n", Procname.c_str(), msg->ProcessId);
 					break;
 			}
-		}**/
+			break;
+		}
 		case ItemType::ProcessExit:
 		{
 			DisplayTime(header->Time);
@@ -154,30 +151,56 @@ void HandleMessage(const BYTE* buffer) {
 					break;
 				}
 			}
+			break;
 		}
 	}
 }
-int main() {
-	HANDLE hPort;
-	auto hr = ::FilterConnectCommunicationPort(L"\\FileBackupPort", 0, nullptr, 0, nullptr, &hPort);
-	if (FAILED(hr)) {
-		printf("Error connecting to port (HR=0x%08X)\n", hr);
-		return 1;
-	}
 
-	BYTE buffer[1 << 12];	// 4 KB
-	auto message = (FILTER_MESSAGE_HEADER*)buffer;
+void addPID(ULONG pid){
 
-	for (;;) {
-		hr = ::FilterGetMessage(hPort, message, sizeof(buffer), nullptr);
+}
+
+
+int wmain(int argc, const wchar_t* argv[]) {
+	if (argc < 2) {
+		HANDLE hPort;
+		auto hr = ::FilterConnectCommunicationPort(L"\\FileBackupPort", 0, nullptr, 0, nullptr, &hPort);
 		if (FAILED(hr)) {
-			printf("Error receiving message (0x%08X)\n", hr);
-			break;
+			printf("Error connecting to port (HR=0x%08X)\n", hr);
+			return 1;
 		}
-		HandleMessage(buffer + sizeof(FILTER_MESSAGE_HEADER));
+
+		BYTE buffer[1 << 12];	// 4 KB
+		auto message = (FILTER_MESSAGE_HEADER*)buffer;
+
+		for (;;) {
+			hr = ::FilterGetMessage(hPort, message, sizeof(buffer), nullptr);
+			if (FAILED(hr)) {
+				printf("Error receiving message (0x%08X)\n", hr);
+				break;
+			}
+			HandleMessage(buffer + sizeof(FILTER_MESSAGE_HEADER));
+		}
+
+		::CloseHandle(hPort);
 	}
+	else {
+		ULONG pid = ::_wtoi(argv[1]);
+		printf("Adding %d PID \n", pid);
 
-	::CloseHandle(hPort);
+		auto hfile = ::CreateFile(L"\\\\.\\KawaiiDrv", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+		DWORD bytes;
 
+		if (hfile == INVALID_HANDLE_VALUE) {
+			printf("Could not get the driver Handle\n");
+			DWORD bytes = GetLastError();
+			printf("Got Error: %d\n",bytes);
+			return 1;
+		}
+
+		::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
+
+		addPID(pid);
+	}
 	return 0;
 }
