@@ -36,6 +36,16 @@ struct ProcessCreateInfo : ItemHeader {
 	USHORT ImageOffset;
 };
 
+struct RegistrySetValueInfo : ItemHeader {
+	ULONG ProcessId;
+	ULONG ThreadId;
+	WCHAR KeyName[256];
+	WCHAR ValueName[64];
+	ULONG DataType;
+	UCHAR Data[128];
+	ULONG DataSize;
+};
+
 template<typename T>
 struct FullItem {
 	LIST_ENTRY Entry;

@@ -41,6 +41,16 @@ struct ProcessCreateInfo : ItemHeader {
 	USHORT ImageOffset;
 };
 
+struct RegistrySetValueInfo : ItemHeader {
+	ULONG ProcessId;
+	ULONG ThreadId;
+	WCHAR KeyName[256];
+	WCHAR ValueName[64];
+	ULONG DataType;
+	UCHAR Data[128];
+	ULONG DataSize;
+};
+
 template<typename T>
 struct FullItem {
 	LIST_ENTRY Entry;
@@ -63,10 +73,11 @@ void DisplayBinary(const UCHAR* buffer, DWORD size) {
 void HandleMessage(const BYTE* buffer) {
 	auto header = (ItemHeader*)buffer;
 	switch (header->Type) {
-		case ItemType::RegistrySetValue:
+		/**case ItemType::FSactivity:
 		{
 			auto msg = (KawaiiFSOperation*)buffer;
-			std::wstring filename((WCHAR*)(buffer + msg->FileName), msg->FileNameLength + 1);
+			USHORT totallen = (USHORT)msg->FileNameLength + 1;
+			std::wstring filename((WCHAR*)(buffer + msg->FileName),totallen);
 			filename[msg->FileNameLength] = 0;
 			std::wstring Procname((WCHAR*)(buffer + msg->ProcessName), msg->ProcessLength);
 			DisplayTime(header->Time);
@@ -96,7 +107,7 @@ void HandleMessage(const BYTE* buffer) {
 					printf("\tBy process: %ws with PID %I64d\n", Procname.c_str(), msg->ProcessId);
 					break;
 			}
-		}
+		}**/
 		case ItemType::ProcessExit:
 		{
 			DisplayTime(header->Time);
@@ -113,8 +124,36 @@ void HandleMessage(const BYTE* buffer) {
 			printf("Process %d Created\n.", info->ProcessId);
 			printf(" Image: %ws\n", image.c_str());
 			printf("\tComandline: %ws\n\n", commandline.c_str());
-
 			break;
+		}
+		case ItemType::RegistrySetValue:
+		{
+			DisplayTime(header->Time);
+			auto info = (RegistrySetValueInfo*)buffer;
+			printf("Registry write PID=%d: %ws\\%ws type: %d size: %d data: ", info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize);
+			switch (info->DataType) {
+				case REG_DWORD:
+				{
+					printf("0x%08X\n", *(DWORD*)info->Data);
+					break;
+				}
+				case REG_SZ:
+				case REG_EXPAND_SZ:
+				{
+					printf("%ws\n", (WCHAR*)info->Data);
+					break;
+				}
+				case REG_BINARY:
+				{
+					DisplayBinary(info->Data, min(info->DataSize, sizeof(info->Data)));
+					break;
+				}
+				default:
+				{
+					DisplayBinary(info->Data, min(info->DataSize, sizeof(info->Data)));
+					break;
+				}
+			}
 		}
 	}
 }
