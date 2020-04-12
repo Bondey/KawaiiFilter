@@ -747,7 +747,7 @@ void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operat
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
     UNREFERENCED_PARAMETER(Process);
 
-    if (SendClientPort && (FindProcess(HandleToULong(ProcessId)) || FindProcess(HandleToULong(CreateInfo->ParentProcessId)) || !FBP)) {
+    if (SendClientPort) {
         if (CreateInfo ) {
             
             USHORT allocSize = sizeof(ProcessCreateInfo);
@@ -800,11 +800,11 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
             FltSendMessage(gFilterHandle, &SendClientPort, item, allocSize, nullptr, nullptr, &timeout);
             ExFreePool(item);
 
-            // Start nonitoring if parent is being monitored
-            if (FindProcess(HandleToULong(CreateInfo->ParentProcessId))) {
-                AutoLock<FastMutex> lock(Mutex);
-                AddProcess(HandleToULong(ProcessId));
-            }
+            // Start monitoring if parent is being monitored (REMOVED, RemoteThread follow Works better)
+            //if (FindProcess(HandleToULong(CreateInfo->ParentProcessId))) {
+            //    AutoLock<FastMutex> lock(Mutex);
+            //    AddProcess(HandleToULong(ProcessId));
+            //}
 
         }
         else {
