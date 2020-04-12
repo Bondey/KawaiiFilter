@@ -13,7 +13,9 @@ enum class ItemType : short {
 	FSactivity,
 	ProcessCreate,
 	ProcessExit,
-	RegistrySetValue
+	RegistrySetValue,
+	ThreadCreate,
+	ThreadExit
 };
 
 struct ItemHeader {
@@ -51,6 +53,11 @@ struct RegistrySetValueInfo : ItemHeader {
 	ULONG DataType;
 	UCHAR Data[128];
 	ULONG DataSize;
+};
+
+struct ThreadCreateExitInfo : ItemHeader {
+	ULONG ThreadId;
+	ULONG ProcessId;
 };
 
 void DisplayTime(const LARGE_INTEGER& time) {
@@ -151,6 +158,22 @@ void HandleMessage(const BYTE* buffer) {
 					break;
 				}
 			}
+			break;
+		}
+		case ItemType::ThreadCreate:
+		{
+			DisplayTime(header->Time);
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("Thread %d Created in process %d\n",
+				info->ThreadId, info->ProcessId);
+			break;
+		}
+		case ItemType::ThreadExit:
+		{
+			DisplayTime(header->Time);
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("Thread %d Exited from process %d\n",
+				info->ThreadId, info->ProcessId);
 			break;
 		}
 	}

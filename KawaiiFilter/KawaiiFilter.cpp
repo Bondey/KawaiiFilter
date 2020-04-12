@@ -1,16 +1,19 @@
 /*++
+Author:
+
+    @JagaimoKawaii
 
 Module Name:
 
     KawaiiFilter.cpp
 
-Abstract:
+TODO:
 
-    This is the main module of the KawaiiFilter miniFilter driver.
+    1- Add the rest of the Registry ops
+    2- Add IOCTL to disable FBP (Filter by process)
+    3- Research possible "CmCallbackGetKeyObjectID" handle leak
 
-Environment:
 
-    Kernel mode
 
 --*/
 
@@ -122,8 +125,9 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ P
 FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
 
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo);
-
+void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create);
 NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2);
+
 
 void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operation);
 
@@ -383,6 +387,14 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
         status = PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, FALSE);
         if (!NT_SUCCESS(status)) 
             KdPrint(("Could not create Process Callback (%08X) \n", status));
+
+        //
+        // thread creation/deletion Callback
+        //
+
+        status = PsSetCreateThreadNotifyRoutine(OnThreadNotify);
+        if (!NT_SUCCESS(status))
+            KdPrint(("failed to set thread callbacks (status=%08X)\n", status));
        
         //
         // registry modification Callback
@@ -409,6 +421,7 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
 
     CmUnRegisterCallback(gRegHandle);
     PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, TRUE);
+    PsRemoveCreateThreadNotifyRoutine(OnThreadNotify);
     FltCloseCommunicationPort(FilterPort);
     FltUnregisterFilter( gFilterHandle );
 
@@ -732,8 +745,9 @@ void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operat
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
     UNREFERENCED_PARAMETER(Process);
 
-    if (SendClientPort) {
-        if (CreateInfo) {
+    if (SendClientPort && (FindProcess(HandleToULong(ProcessId)) || FindProcess(HandleToULong(CreateInfo->ParentProcessId)) || !FBP)) {
+        if (CreateInfo ) {
+            
             USHORT allocSize = sizeof(ProcessCreateInfo);
             USHORT commandLineSize = 0;
             USHORT ImageSize = 0;
@@ -783,13 +797,23 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
             timeout.QuadPart = -10000 * 100; // 100msec
             FltSendMessage(gFilterHandle, &SendClientPort, item, allocSize, nullptr, nullptr, &timeout);
             ExFreePool(item);
+
+            // Start nonitoring if parent is being monitored
+            if (FindProcess(HandleToULong(CreateInfo->ParentProcessId))) {
+                AutoLock<FastMutex> lock(Mutex);
+                AddProcess(HandleToULong(ProcessId));
+            }
+
         }
         else {
+
+            
             auto item = (ProcessExitInfo*)ExAllocatePoolWithTag(PagedPool, sizeof(ProcessExitInfo), DRIVER_TAG);
             if (item == nullptr) {
                 KdPrint(("Failed allocation\n"));
                 return;
             }
+
             item->Type = ItemType::ProcessExit;
             KeQuerySystemTime(&item->Time);
             item->ProcessId = HandleToULong(ProcessId);
@@ -799,7 +823,33 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
             timeout.QuadPart = -10000 * 100; // 100msec
             FltSendMessage(gFilterHandle, &SendClientPort, item, sizeof(ProcessExitInfo), nullptr, nullptr, &timeout);
             ExFreePool(item);
+
+            if (FindProcess(HandleToULong(ProcessId))) {
+                AutoLock<FastMutex> lock(Mutex);
+                RemoveProcess(HandleToULong(ProcessId));
+            }
+
         }
+    }
+}
+
+void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
+    if (SendClientPort){
+        auto size = sizeof(ThreadCreateExitInfo);
+        auto item = (ThreadCreateExitInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+        if (item == nullptr)
+            KdPrint(("Failed to allocate memory\n"));
+    
+        KeQuerySystemTime(&item->Time);
+        item->Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit; 
+        item->ProcessId = HandleToULong(ProcessId);
+        item->ThreadId = HandleToULong(ThreadId);
+
+        // Send message
+        LARGE_INTEGER timeout;
+        timeout.QuadPart = -10000 * 100; // 100msec
+        FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+        ExFreePool(item);
     }
 }
 
