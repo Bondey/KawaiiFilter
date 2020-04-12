@@ -15,7 +15,8 @@ enum class ItemType : short {
 	ProcessExit,
 	RegistrySetValue,
 	ThreadCreate,
-	ThreadExit
+	ThreadExit,
+	ImageLoad
 };
 
 struct ItemHeader {
@@ -60,6 +61,12 @@ struct ThreadCreateExitInfo : ItemHeader {
 	ULONG ThreadId;
 	ULONG CreatorProcessId;
 	ULONG TargetProcessId;
+};
+
+struct ImageLoadInfo : ItemHeader {
+	ULONG ProcessId;
+	USHORT ImageLength;
+	USHORT ImageOffset;
 };
 
 void DisplayTime(const LARGE_INTEGER& time) {
@@ -178,13 +185,16 @@ void HandleMessage(const BYTE* buffer) {
 				info->ThreadId, info->TargetProcessId);
 			break;
 		}
+		case ItemType::ImageLoad:
+		{
+			DisplayTime(header->Time);
+			auto info = (ImageLoadInfo*)buffer;
+			std::wstring image((WCHAR*)(buffer + info->ImageOffset), info->ImageLength);
+			printf("Process %d Loaded image %ws\n.", info->ProcessId, image.c_str());
+			break;
+		}
 	}
 }
-
-void addPID(ULONG pid){
-
-}
-
 
 int wmain(int argc, const wchar_t* argv[]) {
 	if (argc < 2) {
@@ -225,7 +235,6 @@ int wmain(int argc, const wchar_t* argv[]) {
 
 		::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
 
-		addPID(pid);
 	}
 	return 0;
 }

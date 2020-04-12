@@ -9,11 +9,37 @@ Module Name:
 
 TODO:
 
-    1- Add the rest of the Registry ops
-    2- Add IOCTL to disable FBP (Filter by process)
-    3- Research possible "CmCallbackGetKeyObjectID" handle leak
-    4- Solo monitorizar registro si "SendClientPort"
+    - Add the rest of the Registry ops
+    - Add IOCTL to disable FBP (Filter by process)
+    - Research possible "CmCallbackGetKeyObjectID" handle leak
+    - Solo monitorizar registro si "SendClientPort"
+    - Add Object access monitor
 
+    // Durante puente de pascua
+
+    - Process Hide by DKOM by R3 config
+    - Create Process from R0 with parent by IOCTL
+    - Block process image creation by R3 config
+    - Fake registry content by R3 config
+    - Fake file content by R3 config
+
+    // durante COVID
+
+    - Get more Info By stack trace
+    - Add Driver IOCTL monitor
+
+DONE:
+
+    - FS Monitor
+    - Process Monitor
+    - Thread/RemoteThread Monitor
+    - Registry Monitor
+    - ImageLoad monitor
+    - R3 Agent
+    - FSPort IPC
+    - IOCTL IPC
+    - PID Filtering
+    - PID Following
 
 
 --*/
@@ -34,7 +60,7 @@ ULONG_PTR OperationStatusCtx = 1;
 
 #define PTDBG_TRACE_ROUTINES            0x00000001
 #define PTDBG_TRACE_OPERATION_STATUS    0x00000002
-#define DRIVER_TAG 'Kawi'
+
 
 ULONG gTraceFlags = 0;
 BOOLEAN FBP = TRUE;
@@ -43,6 +69,8 @@ BOOLEAN FBP = TRUE;
     (FlagOn(gTraceFlags,(_dbgLevel)) ?              \
         DbgPrint _string :                          \
         ((int)0))
+
+#define DRIVER_TAG 'Kawi'
 
 extern "C" NTSTATUS ZwQueryInformationProcess(
     _In_ HANDLE ProcessHandle,
@@ -128,6 +156,7 @@ FLT_PREOP_CALLBACK_STATUS KawaiiPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Dat
 
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo);
 void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create);
+void OnImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo);
 NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2);
 
 
@@ -398,6 +427,9 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
         if (!NT_SUCCESS(status))
             KdPrint(("failed to set thread callbacks (status=%08X)\n", status));
        
+        status = PsSetLoadImageNotifyRoutine(OnImageNotify);
+        if (!NT_SUCCESS(status))
+            KdPrint(("failed to set ImageLoad callbacks (status=%08X)\n", status));
         //
         // registry modification Callback
         //
@@ -424,6 +456,7 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
     CmUnRegisterCallback(gRegHandle);
     PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, TRUE);
     PsRemoveCreateThreadNotifyRoutine(OnThreadNotify);
+    PsRemoveLoadImageNotifyRoutine(OnImageNotify);
     FltCloseCommunicationPort(FilterPort);
     FltUnregisterFilter( gFilterHandle );
 
@@ -880,6 +913,34 @@ void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
             
             ExFreePool(item);
         }
+    }
+}
+
+void OnImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo) {
+    UNREFERENCED_PARAMETER(ImageInfo);
+
+    if (SendClientPort && FullImageName != nullptr && (FindProcess(HandleToULong(ProcessId)) || ProcessId == 0 || !FBP)) {
+        USHORT allocSize = sizeof(ImageLoadInfo)+ FullImageName->Length;
+
+        auto item = (ImageLoadInfo*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
+        if (item == nullptr) {
+            KdPrint(("Failed allocation\n"));
+            return;
+        }
+
+        item->ProcessId = HandleToULong(ProcessId);
+        item->Type = ItemType::ImageLoad;
+        KeQuerySystemTime(&item->Time);
+
+        ::memcpy((UCHAR*)item + sizeof(ImageLoadInfo), FullImageName->Buffer, FullImageName->Length);
+        item->ImageLength = FullImageName->Length / sizeof(WCHAR);
+        item->ImageOffset = sizeof(ImageLoadInfo);
+        
+        // Send message
+        LARGE_INTEGER timeout;
+        timeout.QuadPart = -10000 * 100; // 100msec
+        FltSendMessage(gFilterHandle, &SendClientPort, item, allocSize, nullptr, nullptr, &timeout);
+        ExFreePool(item);
     }
 }
 

@@ -10,7 +10,8 @@ enum class ItemType : short {
 	ProcessExit,
 	RegistrySetValue,
 	ThreadCreate,
-	ThreadExit
+	ThreadExit,
+	ImageLoad
 };
 
 struct ItemHeader {
@@ -55,6 +56,12 @@ struct ThreadCreateExitInfo : ItemHeader {
 	ULONG ThreadId;
 	ULONG CreatorProcessId;
 	ULONG TargetProcessId;
+};
+
+struct ImageLoadInfo : ItemHeader {
+	ULONG ProcessId;
+	USHORT ImageLength;
+	USHORT ImageOffset;
 };
 
 /*
