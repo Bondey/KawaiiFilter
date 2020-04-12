@@ -7,6 +7,7 @@
 #pragma comment(lib, "fltlib")
 
 #define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TOGGLE_FBP CTL_CODE(0x8000,0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 enum class ItemType : short {
 	None,
@@ -16,7 +17,8 @@ enum class ItemType : short {
 	RegistrySetValue,
 	ThreadCreate,
 	ThreadExit,
-	ImageLoad
+	ImageLoad,
+	OpenProcess
 };
 
 struct ItemHeader {
@@ -67,6 +69,11 @@ struct ImageLoadInfo : ItemHeader {
 	ULONG ProcessId;
 	USHORT ImageLength;
 	USHORT ImageOffset;
+};
+
+struct OpenProcessInfo : ItemHeader {
+	ULONG OpenerProces;
+	ULONG TargetProcess;
 };
 
 void DisplayTime(const LARGE_INTEGER& time) {
@@ -193,6 +200,14 @@ void HandleMessage(const BYTE* buffer) {
 			printf("Process %d Loaded image %ws\n.", info->ProcessId, image.c_str());
 			break;
 		}
+		case ItemType::OpenProcess:
+		{
+			DisplayTime(header->Time);
+			auto info = (OpenProcessInfo*)buffer;
+			printf("Process %d got handle for process %d\n",
+				info->OpenerProces, info->TargetProcess);
+			break;
+		}
 	}
 }
 
@@ -220,8 +235,6 @@ int wmain(int argc, const wchar_t* argv[]) {
 		::CloseHandle(hPort);
 	}
 	else {
-		ULONG pid = ::_wtoi(argv[1]);
-		printf("Adding %d PID \n", pid);
 
 		auto hfile = ::CreateFile(L"\\\\.\\KawaiiDrv", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 		DWORD bytes;
@@ -233,8 +246,14 @@ int wmain(int argc, const wchar_t* argv[]) {
 			return 1;
 		}
 
-		::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
+		if (!::_wcsicmp(argv[1], L"-t")) {
+			::DeviceIoControl(hfile, IOCTL_TOGGLE_FBP, nullptr, 0, nullptr, 0, &bytes, nullptr);
+		} else{
+			ULONG pid = ::_wtoi(argv[1]);
+			printf("Adding %d PID \n", pid);
 
+			::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
+		}
 	}
 	return 0;
 }

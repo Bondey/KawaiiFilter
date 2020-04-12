@@ -2,6 +2,7 @@
 #include <fltKernel.h>
 
 #define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TOGGLE_FBP CTL_CODE(0x8000,0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 enum class ItemType : short {
 	None,
@@ -11,7 +12,8 @@ enum class ItemType : short {
 	RegistrySetValue,
 	ThreadCreate,
 	ThreadExit,
-	ImageLoad
+	ImageLoad,
+	OpenProcess
 };
 
 struct ItemHeader {
@@ -62,6 +64,11 @@ struct ImageLoadInfo : ItemHeader {
 	ULONG ProcessId;
 	USHORT ImageLength;
 	USHORT ImageOffset;
+};
+
+struct OpenProcessInfo : ItemHeader {
+	ULONG OpenerProces;
+	ULONG TargetProcess;
 };
 
 /*

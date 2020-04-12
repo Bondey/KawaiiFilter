@@ -10,13 +10,10 @@ Module Name:
 TODO:
 
     - Add the rest of the Registry ops
-    - Add IOCTL to disable FBP (Filter by process)
-    - Research possible "CmCallbackGetKeyObjectID" handle leak
-    - Solo monitorizar registro si "SendClientPort"
-    - Add Object access monitor
 
     // Durante puente de pascua
 
+    - R3 config load an parse.
     - Process Hide by DKOM by R3 config
     - Create Process from R0 with parent by IOCTL
     - Block process image creation by R3 config
@@ -34,12 +31,14 @@ DONE:
     - Process Monitor
     - Thread/RemoteThread Monitor
     - Registry Monitor
-    - ImageLoad monitor
+    - ImageLoad Monitor
+    - Object access Monitor
     - R3 Agent
     - FSPort IPC
     - IOCTL IPC
     - PID Filtering
     - PID Following
+    - IOCTL to disable FBP (Filter by process)
 
 
 --*/
@@ -55,6 +54,7 @@ PFLT_PORT SendClientPort;
 FastMutex Mutex;
 PFLT_FILTER gFilterHandle; 
 LARGE_INTEGER gRegHandle;
+PVOID gObRegHandle;
 
 ULONG_PTR OperationStatusCtx = 1;
 
@@ -158,7 +158,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create);
 void OnImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo);
 NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2);
-
+OB_PREOP_CALLBACK_STATUS OnPreOpenProcess(PVOID, POB_PRE_OPERATION_INFORMATION Info);
 
 void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operation);
 
@@ -346,6 +346,11 @@ NTSTATUS DeviceIOCTLHandler(PDEVICE_OBJECT, PIRP Irp) {
             }
             break;
         }
+        case IOCTL_TOGGLE_FBP:
+        {
+            FBP = !FBP;
+            break;
+        }
     }
 
     Irp->IoStatus.Status = status;
@@ -427,6 +432,10 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
         if (!NT_SUCCESS(status))
             KdPrint(("failed to set thread callbacks (status=%08X)\n", status));
        
+        //
+        // image load Callback
+        //
+
         status = PsSetLoadImageNotifyRoutine(OnImageNotify);
         if (!NT_SUCCESS(status))
             KdPrint(("failed to set ImageLoad callbacks (status=%08X)\n", status));
@@ -439,6 +448,32 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
         if (!NT_SUCCESS(status)) 
             KdPrint(("failed to set registry callback (%08X) \n", status));
         
+        //
+        // ObCallback for Process
+        //
+
+        OB_OPERATION_REGISTRATION operations[] = {
+            {
+            PsProcessType, // object type
+            OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE,
+            OnPreOpenProcess, nullptr // pre, post
+            }
+        };
+        OB_CALLBACK_REGISTRATION reg = {
+            OB_FLT_REGISTRATION_VERSION,
+            1, // operation count
+            RTL_CONSTANT_STRING(L"12345.6171"), // altitude
+            nullptr, // context
+            operations
+        };
+
+        status = ObRegisterCallbacks(&reg, &gObRegHandle);
+        if (!NT_SUCCESS(status)) 
+            KdPrint(("failed to set ObCallback callback (%08X) \n", status));
+        
+
+
+
     }
     KdPrint(("KawaiiFilter loaded"));
     return status;
@@ -464,7 +499,7 @@ NTSTATUS KawaiiFilterUnload ( _In_ FLT_FILTER_UNLOAD_FLAGS Flags )
 }
 
 /*************************************************************************
-    MiniFilter callback routines.
+    FS MiniFilter callback routines.
 *************************************************************************/
 
 FLT_PREOP_CALLBACK_STATUS KawaiiFilterPreOperation ( _Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID *CompletionContext )
@@ -916,6 +951,10 @@ void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
     }
 }
 
+/*************************************************************************
+    ImageLoad callback related stuff.
+*************************************************************************/
+
 void OnImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo) {
     UNREFERENCED_PARAMETER(ImageInfo);
 
@@ -950,10 +989,11 @@ void OnImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO 
 
 NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
     UNREFERENCED_PARAMETER(context);
-    // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nc-wdm-ex_callback_function
-    ULONG Curpid = HandleToULong(PsGetCurrentProcessId());
-    if (FindProcess(Curpid) || !FBP ){
-        switch ((REG_NOTIFY_CLASS)(ULONG_PTR)Arg1) {
+    if (SendClientPort) {
+        // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nc-wdm-ex_callback_function
+        ULONG Curpid = HandleToULong(PsGetCurrentProcessId());
+        if (FindProcess(Curpid) || !FBP) {
+            switch ((REG_NOTIFY_CLASS)(ULONG_PTR)Arg1) {
             case RegNtPostSetValueKey:
             {
                 auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
@@ -1013,7 +1053,48 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
             }
             default:
                 break;
+            }
         }
     }
     return STATUS_SUCCESS;
+}
+
+/*************************************************************************
+    Process ObCallback related stuff.
+*************************************************************************/
+
+OB_PREOP_CALLBACK_STATUS OnPreOpenProcess(PVOID, POB_PRE_OPERATION_INFORMATION Info) {
+    if (SendClientPort ) {
+
+        if (Info->KernelHandle) 
+            return OB_PREOP_SUCCESS;
+        
+        auto currproc = PsGetCurrentProcessId();
+        if (FindProcess(HandleToULong(currproc)) || !FBP) {
+            auto process = (PEPROCESS)Info->Object;
+            auto pid = HandleToULong(PsGetProcessId(process));
+        
+            auto item = (OpenProcessInfo*)ExAllocatePoolWithTag(PagedPool, sizeof(OpenProcessInfo), DRIVER_TAG);
+            if (item == nullptr){
+                KdPrint(("Failed allocation\n"));
+                return OB_PREOP_SUCCESS;
+            }
+            
+            KeQuerySystemTime(&item->Time);
+            item->Type = ItemType::OpenProcess;
+            item->OpenerProces = HandleToULong(currproc);
+            item->TargetProcess = pid;
+
+            // Send message
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, item, sizeof(OpenProcessInfo), nullptr, nullptr, &timeout);
+            ExFreePool(item);
+            
+            KdPrint(("Started monitoring %d BC has been opened by %d \n", pid, HandleToULong(currproc) ));
+            AutoLock<FastMutex> lock(Mutex);
+            AddProcess(pid);
+        }
+    }
+    return OB_PREOP_SUCCESS;
 }
