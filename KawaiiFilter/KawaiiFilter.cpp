@@ -12,6 +12,7 @@ TODO:
     1- Add the rest of the Registry ops
     2- Add IOCTL to disable FBP (Filter by process)
     3- Research possible "CmCallbackGetKeyObjectID" handle leak
+    4- Solo monitorizar registro si "SendClientPort"
 
 
 
@@ -59,12 +60,21 @@ const int MaxPids = 256;
 int PidsCount;
 ULONG Pids[MaxPids];
 
-bool AddProcess(ULONG pid) {
-    for (int i = 0; i < MaxPids; i++) {
-        if (Pids[i] == 0) {
-            Pids[i] = pid;
-            PidsCount++;
+bool FindProcess(ULONG pid) {
+    for (int i = 0; i < MaxPids; i++)
+        if (Pids[i] == pid)
             return true;
+    return false;
+}
+
+bool AddProcess(ULONG pid) {
+    if (!FindProcess(pid)){
+        for (int i = 0; i < MaxPids; i++) {
+            if (Pids[i] == 0) {
+                Pids[i] = pid;
+                PidsCount++;
+                return true;
+            }
         }
     }
     return false;
@@ -80,14 +90,6 @@ bool RemoveProcess(ULONG pid) {
     }
     return false;
 }
-
-bool FindProcess(ULONG pid) {
-    for (int i = 0; i < MaxPids; i++)
-        if (Pids[i] == pid)
-            return true;
-    return false;
-}
-
 
 /*************************************************************************
     Prototypes
@@ -833,23 +835,51 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
     }
 }
 
-void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
-    if (SendClientPort){
-        auto size = sizeof(ThreadCreateExitInfo);
-        auto item = (ThreadCreateExitInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
-        if (item == nullptr)
-            KdPrint(("Failed to allocate memory\n"));
-    
-        KeQuerySystemTime(&item->Time);
-        item->Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit; 
-        item->ProcessId = HandleToULong(ProcessId);
-        item->ThreadId = HandleToULong(ThreadId);
+/*************************************************************************
+    Threads callback related stuff.
+*************************************************************************/
 
-        // Send message
-        LARGE_INTEGER timeout;
-        timeout.QuadPart = -10000 * 100; // 100msec
-        FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
-        ExFreePool(item);
+void OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
+    // Check of remote thread: http://dreamofareverseengineer.blogspot.com/2014/06/monitoring-thread-injection.html
+   
+    if (SendClientPort){
+        auto currproc = PsGetCurrentProcessId();
+        if(FindProcess(HandleToULong(currproc)) || !FBP){ 
+            if (currproc != ProcessId) {
+
+            }
+            auto size = sizeof(ThreadCreateExitInfo);
+            auto item = (ThreadCreateExitInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+            if (item == nullptr){
+                KdPrint(("Failed to allocate memory\n"));
+                return;
+            }
+    
+            KeQuerySystemTime(&item->Time);
+            item->Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit; 
+            item->TargetProcessId = HandleToULong(ProcessId);
+            item->CreatorProcessId = HandleToULong(currproc);
+            item->ThreadId = HandleToULong(ThreadId);
+            if (currproc != ProcessId) {
+                item->remote = TRUE;
+            }
+            else {
+                item->remote = FALSE;
+            }
+
+            // Send message
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -10000 * 100; // 100msec
+            FltSendMessage(gFilterHandle, &SendClientPort, item, sizeof(ThreadCreateExitInfo), nullptr, nullptr, &timeout);
+            
+            if (item->remote && FindProcess(HandleToULong(currproc)) && Create) {
+                KdPrint(("Started monitoring %d BC Remote Thread from %d\n", HandleToULong(ProcessId), HandleToULong(currproc)));
+                AutoLock<FastMutex> lock(Mutex);
+                AddProcess(HandleToULong(ProcessId));
+            }
+            
+            ExFreePool(item);
+        }
     }
 }
 

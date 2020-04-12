@@ -8,7 +8,9 @@ enum class ItemType : short {
 	FSactivity,
 	ProcessCreate,
 	ProcessExit,
-	RegistrySetValue
+	RegistrySetValue,
+	ThreadCreate,
+	ThreadExit
 };
 
 struct ItemHeader {
@@ -46,6 +48,13 @@ struct RegistrySetValueInfo : ItemHeader {
 	ULONG DataType;
 	UCHAR Data[128];
 	ULONG DataSize;
+};
+
+struct ThreadCreateExitInfo : ItemHeader {
+	BOOLEAN remote;
+	ULONG ThreadId;
+	ULONG CreatorProcessId;
+	ULONG TargetProcessId;
 };
 
 /*

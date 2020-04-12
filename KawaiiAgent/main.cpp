@@ -56,8 +56,10 @@ struct RegistrySetValueInfo : ItemHeader {
 };
 
 struct ThreadCreateExitInfo : ItemHeader {
+	BOOLEAN remote;
 	ULONG ThreadId;
-	ULONG ProcessId;
+	ULONG CreatorProcessId;
+	ULONG TargetProcessId;
 };
 
 void DisplayTime(const LARGE_INTEGER& time) {
@@ -164,8 +166,8 @@ void HandleMessage(const BYTE* buffer) {
 		{
 			DisplayTime(header->Time);
 			auto info = (ThreadCreateExitInfo*)buffer;
-			printf("Thread %d Created in process %d\n",
-				info->ThreadId, info->ProcessId);
+			printf("Thread %d Created in process %d from process %d\n",
+				info->ThreadId, info->TargetProcessId, info->CreatorProcessId);
 			break;
 		}
 		case ItemType::ThreadExit:
@@ -173,7 +175,7 @@ void HandleMessage(const BYTE* buffer) {
 			DisplayTime(header->Time);
 			auto info = (ThreadCreateExitInfo*)buffer;
 			printf("Thread %d Exited from process %d\n",
-				info->ThreadId, info->ProcessId);
+				info->ThreadId, info->TargetProcessId);
 			break;
 		}
 	}
