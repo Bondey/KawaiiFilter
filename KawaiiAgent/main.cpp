@@ -28,7 +28,7 @@ void DisplayBinary(const UCHAR* buffer, DWORD size) {
 void HandleMessage(const BYTE* buffer) {
 	auto header = (ItemHeader*)buffer;
 	switch (header->Type) {
-		/*case ItemType::FSactivity:
+		case ItemType::FSactivity:
 		{
 			auto msg = (KawaiiFSOperation*)buffer;
 			USHORT totallen = (USHORT)msg->FileNameLength + 1;
@@ -63,7 +63,7 @@ void HandleMessage(const BYTE* buffer) {
 					break;
 			}
 			break;
-		} */
+		} 
 		case ItemType::ProcessExit:
 		{
 			DisplayTime(header->Time);
@@ -212,7 +212,6 @@ void readConfig() {
 	}
 }
 
-
 void createMonitoredProc(WCHAR* procname)
 {
 	STARTUPINFO si;
@@ -257,10 +256,6 @@ void createMonitoredProc(WCHAR* procname)
 }
 
 int wmain(int argc, const wchar_t* argv[]) {
-
-	readConfig();
-	createMonitoredProc((WCHAR*)argv[1]);
-	/*
 	if (argc < 2) {
 		HANDLE hPort;
 		auto hr = ::FilterConnectCommunicationPort(L"\\FileBackupPort", 0, nullptr, 0, nullptr, &hPort);
@@ -292,17 +287,19 @@ int wmain(int argc, const wchar_t* argv[]) {
 			DWORD bytes = GetLastError();
 			printf("Got Error: %d\n",bytes);
 			return 1;
-		}
-		::DeviceIoControl(hfile, IOCTL_TOGGLE_FBP, nullptr, 0, nullptr, 0, &bytes, nullptr);
+		}		
 		if (!::_wcsicmp(argv[1], L"-t")) {
 			::DeviceIoControl(hfile, IOCTL_TOGGLE_FBP, nullptr, 0, nullptr, 0, &bytes, nullptr);
-		} else{
+		} else if (!::_wcsicmp(argv[1], L"-p")) {
+			createMonitoredProc((WCHAR*)argv[2]);
+		} else if (!::_wcsicmp(argv[1], L"-l")) {
+			readConfig();
+		} else {
 			ULONG pid = ::_wtoi(argv[1]);
 			printf("Adding %d PID \n", pid);
-
 			::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
 		}
 	}
-	*/
+	
 	return 0;
 }

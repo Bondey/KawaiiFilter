@@ -9,11 +9,8 @@ Module Name:
 
 TODO:
 
-    
-    
+    - Clean R3 agent
     - Report as JSON
-
-    // Pascua
 
     - WMI mon&pwn 
     - Create Process from with parent by IOCTL
@@ -906,7 +903,7 @@ void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operat
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
     UNREFERENCED_PARAMETER(Process);
 
-    if (SendClientPort) {
+    if (SendClientPort && ( FindProcess(HandleToULong(ProcessId) || FindProcess(HandleToULong(CreateInfo->ParentProcessId))  || !FBP))) {
         if (CreateInfo ) {
             
             USHORT allocSize = sizeof(ProcessCreateInfo);
