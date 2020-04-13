@@ -15,7 +15,7 @@ int nkprocs = 0;
 void DisplayTime(const LARGE_INTEGER& time) {
 	SYSTEMTIME st;
 	::FileTimeToSystemTime((FILETIME*)&time, &st);
-	printf("%02d:%02d:%02d.%03d: ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+	printf("%02d:%02d:%02d.%03d:", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 }
 
 void DisplayBinary(const UCHAR* buffer, DWORD size) {
@@ -167,6 +167,126 @@ void HandleMessage(const BYTE* buffer) {
 	}
 }
 
+void HandleMessagej(const BYTE* buffer) {
+	auto header = (ItemHeader*)buffer;
+	SYSTEMTIME st;
+	::FileTimeToSystemTime((FILETIME*)&header->Time, &st);
+	switch (header->Type) {
+		case ItemType::FSactivity:
+		{
+			auto msg = (KawaiiFSOperation*)buffer;
+			USHORT totallen = (USHORT)msg->FileNameLength + 1;
+			std::wstring filename((WCHAR*)(buffer + msg->FileName), totallen);
+			filename[msg->FileNameLength] = 0;
+			std::wstring Procname((WCHAR*)(buffer + msg->ProcessName), msg->ProcessLength);
+		
+			switch (msg->Operation) {
+				case 0:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs','FSType':'Open','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+				case 1:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs','FSType':'Read','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+				case 2:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs','FSType':'Write','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+				case 3:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs','FSType':'SetInfo','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+				case 4:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs', 'FSType':'DeleteWOpenF','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+				case 5:
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'fs', 'FSType':'DeleteWSetInfo','PID':'%I64d','File':'%ws','Procname':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					break;
+			}
+			break;
+		}
+		case ItemType::ProcessExit:
+		{
+			auto info = (ProcessExitInfo*)buffer;
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'ProcessExit','PID':'%d'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId); 
+			break;
+		}
+		case ItemType::ProcessCreate:
+		{
+			auto info = (ProcessCreateInfo*)buffer;
+			std::wstring commandline((WCHAR*)(buffer + info->CommandLineOffset), info->CommandLineLength);
+			std::wstring image((WCHAR*)(buffer + info->ImageOffset), info->ImageLength);
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'ProcessCreate','PID':'%d','PPID':'%d','Image':'%ws','CommandLine':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->ParentProcessId, image.c_str(), commandline.c_str());
+			break;
+		}
+		case ItemType::RegistrySetValue:
+		{
+			auto info = (RegistrySetValueInfo*)buffer;
+			switch (info->DataType) {
+				case REG_DWORD:
+				{
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryWrite','PID':'%d','RKey':'%ws\\%ws','DataType':'%d','DataSize':%d,'Data':'0x%08X'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, *(DWORD*)info->Data);
+					break;
+				}
+				case REG_SZ:
+				case REG_EXPAND_SZ:
+				{
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryWrite','PID':'%d','RKey':'%ws\\%ws','DataType':'%d','DataSize':%d,'Data':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, (WCHAR*)info->Data);
+					break;
+				}
+				default:
+				{
+					printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryWrite','PID':'%d','RKey':'%ws\\%ws','DataType':'%d','DataSize':%d}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize);
+					break;
+				}
+			}
+			break;
+		}
+		case ItemType::RegistryKeyInfo:
+		{
+			auto info = (RegistryKeyInfo*)buffer;
+			switch (info->Operation) {
+			case 1:
+				printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryOpenKey','PID':'%d','KeyName':'%ws'}\n",st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				break;
+			case 2:
+				printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryCreateKey','PID':'%d','KeyName':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				break;
+			case 3:
+				printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryRenameKey','PID':'%d','KeyName':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				break;
+			case 4:
+				printf("{'Time':'%02d:%02d:%02d.%03d','Type':'RegistryQueryValue','PID':'%d','KeyName':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				break;
+			}
+			break;
+		}
+		case ItemType::ThreadCreate:
+		{
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'ThreadCreate','PID':'%d','RemoteProcPID':'%d','TID':'%d'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->CreatorProcessId, info->ThreadId);
+			break;
+		}
+		case ItemType::ThreadExit:
+		{
+			printf("Proc ThreadExit");
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'ThreadClose','PID':'%d','TID':'%d'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->ThreadId);
+			break;
+		}
+		case ItemType::ImageLoad:
+		{
+			auto info = (ImageLoadInfo*)buffer;
+			std::wstring image((WCHAR*)(buffer + info->ImageOffset), info->ImageLength);
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'ImageLoad','PID':'%d','TargetImage':'%ws'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId ,image.c_str());
+			break;
+		}
+		case ItemType::OpenProcess:
+		{
+			auto info = (OpenProcessInfo*)buffer;
+			printf("{'Time':'%02d:%02d:%02d.%03d','Type':'OpenProcess','OpenerPID':'%d','TargetPID':'%d'}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->OpenerProces, info->TargetProcess);
+			break;
+		}
+	}
+}
+
 void readConfig() {
 	std::wstring line;
 	std::wifstream myfile;
@@ -273,7 +393,7 @@ int wmain(int argc, const wchar_t* argv[]) {
 				printf("Error receiving message (0x%08X)\n", hr);
 				break;
 			}
-			HandleMessage(buffer + sizeof(FILTER_MESSAGE_HEADER));
+			HandleMessagej(buffer + sizeof(FILTER_MESSAGE_HEADER));
 		}
 
 		::CloseHandle(hPort);
