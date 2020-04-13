@@ -80,6 +80,9 @@ struct OpenProcessInfo : ItemHeader {
 	ULONG TargetProcess;
 };
 
+
+void hideprocbypid(HANDLE pid);
+
 /*
 template<typename T>
 struct FullItem {

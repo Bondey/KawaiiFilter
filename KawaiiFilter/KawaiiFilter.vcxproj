@@ -37,6 +37,7 @@
   <ItemGroup>
     <ResourceCompile Include="KawaiiFilter.rc" />
     <ClCompile Include="fastmutex.cpp" />
+    <ClCompile Include="Hideprocs.cpp" />
     <ClCompile Include="KawaiiFilter.cpp" />
     <Inf Include="KawaiiFilter.inf" />
   </ItemGroup>

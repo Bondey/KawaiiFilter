@@ -212,9 +212,54 @@ void readConfig() {
 	}
 }
 
+
+void createMonitoredProc(WCHAR* procname)
+{
+	STARTUPINFO si;
+	PROCESS_INFORMATION pi;
+
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+
+	// Start the child process. 
+	if (!CreateProcess(NULL,   // No module name (use command line)
+		procname,        // Command line
+		NULL,           // Process handle not inheritable
+		NULL,           // Thread handle not inheritable
+		FALSE,          // Set handle inheritance to FALSE
+		CREATE_SUSPENDED,              // No creation flags
+		NULL,           // Use parent's environment block
+		NULL,           // Use parent's starting directory 
+		&si,            // Pointer to STARTUPINFO structure
+		&pi)           // Pointer to PROCESS_INFORMATION structure
+		)
+	{
+		printf("CreateProcess failed (%d).\n", GetLastError());
+		return;
+	}
+
+	printf("process created with PID (%d).\n", pi.dwProcessId);
+	auto hfile = ::CreateFile(L"\\\\.\\KawaiiDrv", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+	DWORD bytes;
+
+	if (hfile == INVALID_HANDLE_VALUE) {
+		printf("Could not get the driver Handle\n");
+		DWORD bytes = GetLastError();
+		printf("Got Error: %d\n", bytes);
+	}
+	::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pi.dwProcessId, sizeof(DWORD), nullptr, 0, &bytes, nullptr);
+
+	ResumeThread(pi.hThread);
+	// Close process and thread handles. 
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+}
+
 int wmain(int argc, const wchar_t* argv[]) {
 
 	readConfig();
+	createMonitoredProc((WCHAR*)argv[1]);
 	/*
 	if (argc < 2) {
 		HANDLE hPort;

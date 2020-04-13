@@ -3,6 +3,13 @@ My all in one VM harden&monitor
 
 ## Features
 
+### Hidding process images by DKOM
+**Some shit need to be done before using this feature**
+
+  **Disable PatchGuard, try [EfiGuard](https://github.com/Mattiwatti/EfiGuard), [UPGDSED](https://github.com/hfiref0x/UPGDSED) or [Shark](https://github.com/9176324/Shark).**
+
+  **Enable testSigning: "bcdedit /set testsigning on"**
+
 ### Sysmon Like system monitoring
 - Can monitor de wole system 
 - Can filter by PID, a new PID is monitored if:
