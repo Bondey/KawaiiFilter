@@ -9,7 +9,6 @@ Module Name:
 
 TODO:
 
-    - R3 config load and parse.
     - Process Hide by DKOM by R3 config
     - Create Process from R0 with parent by IOCTL
     - Block process image creation by R3 config (F*ck slui.exe :P )
@@ -37,6 +36,7 @@ DONE:
     - PID Filtering
     - PID Following
     - IOCTL to disable FBP (Filter by process)
+    - R3 config load and parse.
 
 
 --*/
@@ -112,6 +112,77 @@ bool RemoveProcess(ULONG pid) {
             Pids[i] = 0;
             PidsCount--;
             return true;
+        }
+    }
+    return false;
+}
+
+/*************************************************************************
+    Hidden/Kill processes stuff
+*************************************************************************/
+WCHAR Lastimage[1024];
+// hide
+const int Maxhprocs = 50;
+int nhprocs;
+WCHAR Hprocs[Maxhprocs][100];
+
+void hprocsinit() {
+    nhprocs = 0;
+    for (int i = 0; i < Maxhprocs; i++) {
+        ::wcsncpy_s(Hprocs[i], L"-", 2);
+    }
+}
+bool FindHProc(WCHAR* proc) {
+    for (int i = 0; i < Maxhprocs; i++) {
+        if (wcsstr(proc,Hprocs[i]) != nullptr) {
+            KdPrint(("Found HProc %ws\n", Hprocs[i]));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AddHProc(WCHAR* proc, int len) {
+    if (!FindHProc(proc)){
+        for (int i = 0; i < Maxhprocs; i++) {
+            if (wcsstr(Hprocs[i], L"-") != nullptr) {
+                ::wcsncpy_s(Hprocs[i], proc, len / sizeof(WCHAR));
+                nhprocs++;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+//kill
+const int Maxkprocs = 50;
+int nkprocs;
+WCHAR Kprocs[Maxkprocs][100];
+
+void kprocsinit() {
+    nkprocs = 0;
+    for (int i = 0; i < Maxkprocs; i++) {
+        ::wcsncpy_s(Kprocs[i], L"-", 2);
+    }
+}
+bool FindKProc(WCHAR* proc) {
+    for (int i = 0; i < Maxkprocs; i++) {
+        if (wcsstr(proc,Kprocs[i]) != nullptr) {
+            KdPrint(("Found KProc %ws\n", Kprocs[i]));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AddKProc(WCHAR* proc, int len) {
+    if (!FindHProc(proc)) {
+        for (int i = 0; i < Maxkprocs; i++) {
+            if (wcsstr(Kprocs[i], L"-") != nullptr) {
+                ::wcsncpy_s(Kprocs[i], proc, len / sizeof(WCHAR));
+                nkprocs++;
+                return true;
+            }
         }
     }
     return false;
@@ -349,6 +420,22 @@ NTSTATUS DeviceIOCTLHandler(PDEVICE_OBJECT, PIRP Irp) {
             FBP = !FBP;
             break;
         }
+        case IOCTL_HIDE_IMAGE:
+        {
+            auto size = stack->Parameters.DeviceIoControl.InputBufferLength;
+            auto data = (WCHAR*)Irp->AssociatedIrp.SystemBuffer;
+            AutoLock<FastMutex> lock(Mutex);
+            AddHProc(data,size);
+            break;
+        }
+        case IOCTL_KILL_IMAGE:
+        {
+            auto size = stack->Parameters.DeviceIoControl.InputBufferLength;
+            auto data = (WCHAR*)Irp->AssociatedIrp.SystemBuffer;
+            AutoLock<FastMutex> lock(Mutex);
+            AddKProc(data, size);
+            break;
+        }
     }
 
     Irp->IoStatus.Status = status;
@@ -373,6 +460,8 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
 
     Mutex.Init();
     AddProcess(2);
+    hprocsinit();
+    kprocsinit();
 
     if (NT_SUCCESS( status )) {
 
@@ -899,6 +988,13 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 
         }
     }
+
+    AutoLock<FastMutex> lock(Mutex);
+    if (CreateInfo != nullptr && CreateInfo->ImageFileName != nullptr){
+        ::wcsncpy_s(Lastimage, CreateInfo->ImageFileName->Buffer, CreateInfo->ImageFileName->Length / sizeof(WCHAR));
+        FindHProc(Lastimage);
+        FindKProc(Lastimage);
+    }
 }
 
 /*************************************************************************
@@ -1020,7 +1116,7 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
                     item->ThreadId = HandleToULong(PsGetCurrentThreadId());
 
                     // get specific key/value data
-                    ::wcsncpy_s(item->KeyName, name->Buffer, name->Length / sizeof(WCHAR) - 1);
+                    ::wcsncpy_s(item->KeyName, name->Buffer, name->Length / sizeof(WCHAR));
                     ::wcsncpy_s(item->ValueName, preInfo->ValueName->Buffer, preInfo->ValueName->Length / sizeof(WCHAR));
 
                     item->DataType = preInfo->Type;
