@@ -9,20 +9,18 @@ Module Name:
 
 TODO:
 
-    - Add the rest of the Registry ops
-
-    // Durante puente de pascua
-
-    - R3 config load an parse.
+    - R3 config load and parse.
     - Process Hide by DKOM by R3 config
     - Create Process from R0 with parent by IOCTL
-    - Block process image creation by R3 config
-    - Fake registry content by R3 config
-    - Fake file content by R3 config
+    - Block process image creation by R3 config (F*ck slui.exe :P )
+    - Report as JSON
 
     // durante COVID
 
-    - Get more Info By stack trace
+    - WMI mon&pwn 
+    - Fake registry content by R3 config
+    - Fake file content by R3 config
+    - Get more Info by PID using: stack trace, PEB, EPROCESS
     - Add Driver IOCTL monitor
 
 DONE:
@@ -1004,10 +1002,12 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
                 // ME PREOCUPA QUE NO HAY API PARA LIBERAR LA KEY EN WINDOWS 7, ESTOY LEAKEANDO UN HANDLE??
                 if (NT_SUCCESS(CmCallbackGetKeyObjectID(&gRegHandle, args->Object, nullptr, &name))) {
                     auto preInfo = (REG_SET_VALUE_KEY_INFORMATION*)args->PreInformation;
-                    NT_ASSERT(preInfo);
-                    USHORT size = sizeof(RegistrySetValueInfo);
+                    if (preInfo == nullptr)
+                        break;
+                    
+                    USHORT size = sizeof(RegistrySetValueInfo);                   
                     auto item = (RegistrySetValueInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
-                    if (item == nullptr || preInfo == nullptr)
+                    if (item == nullptr)
                         break;
 
                     RtlZeroMemory(item, size);
@@ -1021,7 +1021,7 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
 
                     // get specific key/value data
                     ::wcsncpy_s(item->KeyName, name->Buffer, name->Length / sizeof(WCHAR) - 1);
-                    ::wcsncpy_s(item->ValueName, preInfo->ValueName->Buffer, preInfo->ValueName->Length / sizeof(WCHAR) - 1);
+                    ::wcsncpy_s(item->ValueName, preInfo->ValueName->Buffer, preInfo->ValueName->Length / sizeof(WCHAR));
 
                     item->DataType = preInfo->Type;
                     item->DataSize = preInfo->DataSize;
@@ -1035,20 +1035,100 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
                 }
                 break;
             }
-            case RegNtPostQueryValueKey:
+            case RegNtPreOpenKeyEx:
             {
-                auto args = (REG_POST_OPERATION_INFORMATION*)Arg2;
-                if (!NT_SUCCESS(args->Status)) {
+                auto PreOpenInfo = (REG_OPEN_KEY_INFORMATION*)Arg2;
+                USHORT size = sizeof(RegistryKeyInfo);
+                auto item = (RegistryKeyInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+                if (item == nullptr)
                     break;
-                }
+
+                RtlZeroMemory(item, size);
+
+                KeQuerySystemTime(&item->Time);
+                item->Operation = 1;
+                item->Type = ItemType::RegistryKeyInfo;
+                item->ProcessId = Curpid;
+                ::wcsncpy_s(item->KeyName, PreOpenInfo->CompleteName->Buffer, PreOpenInfo->CompleteName->Length / sizeof(WCHAR));
+
+                // Send message
+                LARGE_INTEGER timeout;
+                timeout.QuadPart = -10000 * 100; // 100msec
+                FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+                ExFreePool(item);
+
                 break;
             }
-            case RegNtPostCreateKey:
+            case RegNtPreCreateKeyEx:
             {
-                auto args = (REG_POST_CREATE_KEY_INFORMATION*)Arg2;
-                if (!NT_SUCCESS(args->Status)) {
+                auto PreOpenInfo = (REG_CREATE_KEY_INFORMATION_V1*)Arg2;
+                USHORT size = sizeof(RegistryKeyInfo);
+                auto item = (RegistryKeyInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+                if (item == nullptr)
                     break;
-                }
+
+                RtlZeroMemory(item, size);
+
+                KeQuerySystemTime(&item->Time);
+                item->Operation = 2;
+                item->Type = ItemType::RegistryKeyInfo;
+                item->ProcessId = Curpid;
+                ::wcsncpy_s(item->KeyName, PreOpenInfo->CompleteName->Buffer, PreOpenInfo->CompleteName->Length / sizeof(WCHAR));
+
+                // Send message
+                LARGE_INTEGER timeout;
+                timeout.QuadPart = -10000 * 100; // 100msec
+                FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+                ExFreePool(item);
+
+                break;
+            }
+            case RegNtPreRenameKey:
+            {
+                auto PreOpenInfo = (REG_RENAME_KEY_INFORMATION*)Arg2;
+                USHORT size = sizeof(RegistryKeyInfo);
+                auto item = (RegistryKeyInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+                if (item == nullptr)
+                    break;
+
+                RtlZeroMemory(item, size);
+
+                KeQuerySystemTime(&item->Time);
+                item->Operation = 3;
+                item->Type = ItemType::RegistryKeyInfo;
+                item->ProcessId = Curpid;
+                ::wcsncpy_s(item->KeyName, PreOpenInfo->NewName->Buffer, PreOpenInfo->NewName->Length / sizeof(WCHAR));
+
+                // Send message
+                LARGE_INTEGER timeout;
+                timeout.QuadPart = -10000 * 100; // 100msec
+                FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+                ExFreePool(item);
+
+                break;
+            }
+            case RegNtPreQueryValueKey:
+            {
+                auto PreOpenInfo = (REG_QUERY_VALUE_KEY_INFORMATION*)Arg2;
+                USHORT size = sizeof(RegistryKeyInfo);
+                auto item = (RegistryKeyInfo*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+                if (item == nullptr)
+                    break;
+
+                RtlZeroMemory(item, size);
+
+                KeQuerySystemTime(&item->Time);
+                item->Operation = 4;
+                item->Type = ItemType::RegistryKeyInfo;
+                item->ProcessId = Curpid;
+                ::wcsncpy_s(item->KeyName, PreOpenInfo->ValueName->Buffer, PreOpenInfo->ValueName->Length / sizeof(WCHAR));
+
+                // Send message
+                LARGE_INTEGER timeout;
+                timeout.QuadPart = -10000 * 100; // 100msec
+                FltSendMessage(gFilterHandle, &SendClientPort, item, size, nullptr, nullptr, &timeout);
+                ExFreePool(item);
+
                 break;
             }
             default:
@@ -1058,6 +1138,15 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID Arg1, PVOID Arg2) {
     }
     return STATUS_SUCCESS;
 }
+
+// Pending Keys
+/* 
+RegNtPostQueryKey
+RegNtPostEnumerateKey
+RegNtPostEnumerateValueKey
+RegNtPreDeleteKey
+RegNtPreDeleteValueKey
+*/
 
 /*************************************************************************
     Process ObCallback related stuff.

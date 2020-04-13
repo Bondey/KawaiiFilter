@@ -1,5 +1,5 @@
 #pragma once
-#include <fltKernel.h>
+#include <Windows.h>
 
 #define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_TOGGLE_FBP CTL_CODE(0x8000,0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -60,6 +60,7 @@ struct RegistryKeyInfo : ItemHeader {
 	WCHAR KeyName[257];
 };
 
+
 struct ThreadCreateExitInfo : ItemHeader {
 	BOOLEAN remote;
 	ULONG ThreadId;
@@ -77,11 +78,3 @@ struct OpenProcessInfo : ItemHeader {
 	ULONG OpenerProces;
 	ULONG TargetProcess;
 };
-
-/*
-template<typename T>
-struct FullItem {
-	LIST_ENTRY Entry;
-	T Data;
-};
-*/

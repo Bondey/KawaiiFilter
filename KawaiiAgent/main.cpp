@@ -1,4 +1,4 @@
-#include <Windows.h>
+#include "Common.h"
 #include <fltUser.h>
 #include <stdio.h>
 #include <string>
@@ -6,75 +6,6 @@
 
 #pragma comment(lib, "fltlib")
 
-#define IOCTL_PROCESS_ADDPID CTL_CODE(0x8000,0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_TOGGLE_FBP CTL_CODE(0x8000,0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-enum class ItemType : short {
-	None,
-	FSactivity,
-	ProcessCreate,
-	ProcessExit,
-	RegistrySetValue,
-	ThreadCreate,
-	ThreadExit,
-	ImageLoad,
-	OpenProcess
-};
-
-struct ItemHeader {
-	ItemType Type;
-	LARGE_INTEGER Time;
-};
-
-struct KawaiiFSOperation : ItemHeader {
-	USHORT Operation;
-	ULONG_PTR ProcessId;
-	USHORT FileNameLength;
-	USHORT ProcessLength;
-	USHORT FileName;
-	USHORT ProcessName;
-};
-
-struct ProcessExitInfo : ItemHeader {
-	ULONG ProcessId;
-};
-
-struct ProcessCreateInfo : ItemHeader {
-	ULONG ProcessId;
-	ULONG ParentProcessId;
-	USHORT CommandLineLength;
-	USHORT ImageLength;
-	USHORT CommandLineOffset;
-	USHORT ImageOffset;
-};
-
-struct RegistrySetValueInfo : ItemHeader {
-	ULONG ProcessId;
-	ULONG ThreadId;
-	WCHAR KeyName[256];
-	WCHAR ValueName[64];
-	ULONG DataType;
-	UCHAR Data[128];
-	ULONG DataSize;
-};
-
-struct ThreadCreateExitInfo : ItemHeader {
-	BOOLEAN remote;
-	ULONG ThreadId;
-	ULONG CreatorProcessId;
-	ULONG TargetProcessId;
-};
-
-struct ImageLoadInfo : ItemHeader {
-	ULONG ProcessId;
-	USHORT ImageLength;
-	USHORT ImageOffset;
-};
-
-struct OpenProcessInfo : ItemHeader {
-	ULONG OpenerProces;
-	ULONG TargetProcess;
-};
 
 void DisplayTime(const LARGE_INTEGER& time) {
 	SYSTEMTIME st;
@@ -92,7 +23,7 @@ void DisplayBinary(const UCHAR* buffer, DWORD size) {
 void HandleMessage(const BYTE* buffer) {
 	auto header = (ItemHeader*)buffer;
 	switch (header->Type) {
-		case ItemType::FSactivity:
+		/*case ItemType::FSactivity:
 		{
 			auto msg = (KawaiiFSOperation*)buffer;
 			USHORT totallen = (USHORT)msg->FileNameLength + 1;
@@ -127,7 +58,7 @@ void HandleMessage(const BYTE* buffer) {
 					break;
 			}
 			break;
-		}
+		} */
 		case ItemType::ProcessExit:
 		{
 			DisplayTime(header->Time);
@@ -173,6 +104,26 @@ void HandleMessage(const BYTE* buffer) {
 					DisplayBinary(info->Data, min(info->DataSize, sizeof(info->Data)));
 					break;
 				}
+			}
+			break;
+		}
+		case ItemType::RegistryKeyInfo:
+		{
+			DisplayTime(header->Time);
+			auto info = (RegistryKeyInfo*)buffer;
+			switch (info->Operation){
+				case 1:
+					printf("Registry Open Key %ws BY: %d \n", info->KeyName, info->ProcessId);
+					break;
+				case 2:
+					printf("Registry Create Key %ws BY: %d \n", info->KeyName, info->ProcessId);
+					break;
+				case 3:
+					printf("Registry Rename Key %ws BY: %d \n", info->KeyName, info->ProcessId);
+					break;
+				case 4:
+					printf("Registry Query value Key %ws BY: %d \n", info->KeyName, info->ProcessId);
+					break;
 			}
 			break;
 		}
@@ -235,7 +186,6 @@ int wmain(int argc, const wchar_t* argv[]) {
 		::CloseHandle(hPort);
 	}
 	else {
-
 		auto hfile = ::CreateFile(L"\\\\.\\KawaiiDrv", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 		DWORD bytes;
 
