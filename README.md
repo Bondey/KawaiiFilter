@@ -3,18 +3,17 @@ An all in one VM harden&monitor
 
 ## TODO
 
-- [MONITORING] Json directamente al fichero
 - [MONITORING] R0 Malfind (V1 - HollowsHunter / V2 Propia) 
-- [MONITORING] Filtrar con Python el Json
+- [MONITORING] KawaiiIntel Json Filter
 - [MONITORING] Filter R3 agent log info - with R3 config
 - [HARDEN] WMI monitor and manipulate
 - [MONITORING] Network mini-filter
 - [HARDEN] Create Process with selected parent by IOCTL
+- [MONITORING] Get Privilege information from FS, Registry...
 - [HONEY] Fake registry content - with R3 config
 - [HONEY] Fake file content with - R3 config
 - [MONITORING] Get file from VM yo HOST with VMI
 - [MONITORING] Get more Info by PID using: stack trace, PEB, EPROCESS
-- [MONITORING] Detección de operaciones con determinados privilegios (Registro, Disco...)
 - [MONITORING] Add Driver IOCTL monitor
 
 ## Features

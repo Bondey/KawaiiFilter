@@ -4,6 +4,7 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <signal.h>
 
 #pragma comment(lib, "fltlib")
 
@@ -182,6 +183,10 @@ void HandleMessage(const BYTE* buffer) {
 }
 
 void HandleMessagej(const BYTE* buffer) {
+	std::ofstream ofs;
+	ofs.open("report.json", std::ofstream::out | std::ofstream::app);
+	char buff[512];
+	int len=0;
 	auto header = (ItemHeader*)buffer;
 	SYSTEMTIME st;
 	::FileTimeToSystemTime((FILETIME*)&header->Time, &st);
@@ -196,22 +201,22 @@ void HandleMessagej(const BYTE* buffer) {
 		
 			switch (msg->Operation) {
 				case 0:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Open\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff,512,"{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Open\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 				case 1:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Read\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff, 512,"{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Read\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 				case 2:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Write\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"Write\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 				case 3:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"SetInfo\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"SetInfo\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 				case 4:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"DeleteWOpenF\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"DeleteWOpenF\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 				case 5:
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"DeleteWSetInfo\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"fs\",\"FSType\":\"DeleteWSetInfo\",\"PID\":\"%I64d\",\"File\":\"%ws\",\"Procname\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg->ProcessId, filename.c_str(), Procname.c_str());
 					break;
 			}
 			break;
@@ -219,7 +224,7 @@ void HandleMessagej(const BYTE* buffer) {
 		case ItemType::ProcessExit:
 		{
 			auto info = (ProcessExitInfo*)buffer;
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ProcessExit\",\"PID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId); 
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ProcessExit\",\"PID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId);
 			break;
 		}
 		case ItemType::ProcessCreate:
@@ -227,7 +232,7 @@ void HandleMessagej(const BYTE* buffer) {
 			auto info = (ProcessCreateInfo*)buffer;
 			std::wstring commandline((WCHAR*)(buffer + info->CommandLineOffset), info->CommandLineLength);
 			std::wstring image((WCHAR*)(buffer + info->ImageOffset), info->ImageLength);
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ProcessCreate\",\"PID\":\"%d\",\"PPID\":\"%d\",\"Image\":\"%ws\",\"CommandLine\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->ParentProcessId, image.c_str(), commandline.c_str());
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ProcessCreate\",\"PID\":\"%d\",\"PPID\":\"%d\",\"Image\":\"%ws\",\"CommandLine\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->ParentProcessId, image.c_str(), commandline.c_str());
 			break;
 		}
 		case ItemType::RegistrySetValue:
@@ -236,18 +241,18 @@ void HandleMessagej(const BYTE* buffer) {
 			switch (info->DataType) {
 				case REG_DWORD:
 				{
-					printf("{'Time':\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d,\"Data\":\"0x%08X\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, *(DWORD*)info->Data);
+					len = sprintf_s(buff, 512, "{'Time':\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d,\"Data\":\"0x%08X\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, *(DWORD*)info->Data);
 					break;
 				}
 				case REG_SZ:
 				case REG_EXPAND_SZ:
 				{
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d,\"Data\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, (WCHAR*)info->Data);
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d,\"Data\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize, (WCHAR*)info->Data);
 					break;
 				}
 				default:
 				{
-					printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize);
+					len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryWrite\",\"PID\":\"%d\",\"RKey\":\"%ws\\%ws\",\"DataType\":\"%d\",\"DataSize\":%d}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName, info->ValueName, info->DataType, info->DataSize);
 					break;
 				}
 			}
@@ -258,16 +263,16 @@ void HandleMessagej(const BYTE* buffer) {
 			auto info = (RegistryKeyInfo*)buffer;
 			switch (info->Operation) {
 			case 1:
-				printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryOpenKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n",st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryOpenKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n",st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
 				break;
 			case 2:
-				printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryCreateKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryCreateKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
 				break;
 			case 3:
-				printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryRenameKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryRenameKey\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
 				break;
 			case 4:
-				printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryQueryValue\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
+				len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"RegistryQueryValue\",\"PID\":\"%d\",\"KeyName\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId, info->KeyName);
 				break;
 			}
 			break;
@@ -275,29 +280,31 @@ void HandleMessagej(const BYTE* buffer) {
 		case ItemType::ThreadCreate:
 		{
 			auto info = (ThreadCreateExitInfo*)buffer;
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ThreadCreate\",\"PID\":\"%d\",\"RemoteProcPID\":\"%d\",\"TID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->CreatorProcessId, info->ThreadId);
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ThreadCreate\",\"PID\":\"%d\",\"RemoteProcPID\":\"%d\",\"TID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->CreatorProcessId, info->ThreadId);
 			break;
 		}
 		case ItemType::ThreadExit:
 		{
 			auto info = (ThreadCreateExitInfo*)buffer;
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ThreadClose\",\"PID\":\"%d\",\"TID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->ThreadId);
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ThreadClose\",\"PID\":\"%d\",\"TID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->TargetProcessId, info->ThreadId);
 			break;
 		}
 		case ItemType::ImageLoad:
 		{
 			auto info = (ImageLoadInfo*)buffer;
 			std::wstring image((WCHAR*)(buffer + info->ImageOffset), info->ImageLength);
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ImageLoad\",\"PID\":\"%d\",\"TargetImage\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId ,image.c_str());
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"ImageLoad\",\"PID\":\"%d\",\"TargetImage\":\"%ws\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->ProcessId ,image.c_str());
 			break;
 		}
 		case ItemType::OpenProcess:
 		{
 			auto info = (OpenProcessInfo*)buffer;
-			printf("{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"OpenProcess\",\"OpenerPID\":\"%d\",\"TargetPID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->OpenerProces, info->TargetProcess);
+			len = sprintf_s(buff, 512, "{\"Time\":\"%02d:%02d:%02d.%03d\",\"Type\":\"OpenProcess\",\"OpenerPID\":\"%d\",\"TargetPID\":\"%d\"}\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, info->OpenerProces, info->TargetProcess);
 			break;
 		}
 	}
+	ofs.write(buff, len);
+	ofs.close();
 }
 
 void readConfig() {
@@ -388,8 +395,15 @@ void createMonitoredProc(WCHAR* procname)
 	CloseHandle(pi.hThread);
 }
 
+void signal_callback_handler(int signum) {
+	
+	printf("Got a Ctrl+c");
+	exit(signum);
+}
+
 int wmain(int argc, const wchar_t* argv[]) {
 	if (argc < 2) {
+		signal(SIGINT, signal_callback_handler);
 		HANDLE hPort;
 		auto hr = ::FilterConnectCommunicationPort(L"\\FileBackupPort", 0, nullptr, 0, nullptr, &hPort);
 		if (FAILED(hr)) {

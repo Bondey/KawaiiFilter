@@ -915,9 +915,8 @@ void SendFSRing3Message(UNICODE_STRING* FileName, HANDLE hProcess, USHORT Operat
 
 void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
     UNREFERENCED_PARAMETER(Process);
-
-    if (SendClientPort && ( FindProcess(HandleToULong(ProcessId) || FindProcess(HandleToULong(CreateInfo->ParentProcessId))  || !FBP))) {
-        if (CreateInfo ) {
+    if (SendClientPort) {
+        if (CreateInfo && (!FBP || FindProcess(HandleToULong(ProcessId)) || FindProcess(HandleToULong(CreateInfo->ParentProcessId)) )) {
             
             USHORT allocSize = sizeof(ProcessCreateInfo);
             USHORT commandLineSize = 0;
@@ -976,7 +975,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
             //}
 
         }
-        else {
+        else if ( FindProcess(HandleToULong(ProcessId)) || !FBP){
 
             
             auto item = (ProcessExitInfo*)ExAllocatePoolWithTag(PagedPool, sizeof(ProcessExitInfo), DRIVER_TAG);
