@@ -20,7 +20,7 @@ int UsageInfo() {
 	printf_s("Without flags and with a PID as param starts monitoring this PID\n");
 	printf_s("-h \t\t\tShows this help\n");
 	printf_s("-l \t\t\tLoads config\n");
-	printf_s("-d [executable.exe]\tRuns a binary and starts monitoring it\n");
+	printf_s("-p [executable.exe]\tRuns a binary and starts monitoring it\n");
 	printf_s("-hp [PID] \t\tHide this process\n\n");
 
 	return 0;
