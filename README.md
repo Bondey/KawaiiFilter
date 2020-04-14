@@ -1,17 +1,29 @@
 # KawaiiFilter
 My all in one VM harden&monitor
 
+## TODO
+
+- R0 Malfind
+- Filter R3 agent log info by R3 config
+- WMI monitor and manipulate
+- Network mini-filter
+- Create Process with selected parent by IOCTL
+- Fake registry content by R3 config
+- Fake file content by R3 config
+- Get more Info by PID using: stack trace, PEB, EPROCESS
+- Add Driver IOCTL monitor
+
 ## Features
 
 ### Hidding process images by DKOM
-**Some shit need to be done before using this feature**
+**Some stuff need to be done before using this feature**
 
-  **Disable PatchGuard, try [EfiGuard](https://github.com/Mattiwatti/EfiGuard), [UPGDSED](https://github.com/hfiref0x/UPGDSED) or [Shark](https://github.com/9176324/Shark).**
+  1- **Disable PatchGuard, try [EfiGuard](https://github.com/Mattiwatti/EfiGuard), [UPGDSED](https://github.com/hfiref0x/UPGDSED) or [Shark](https://github.com/9176324/Shark).**
 
-  **Enable testSigning: "bcdedit /set testsigning on"**
+  2. **Enable testSigning: "bcdedit /set testsigning on"**
 
 ### Sysmon Like system monitoring
-- Can monitor de wole system 
+- Can monitor de wole system (not recomended)
 - Can filter by PID, a new PID is monitored if:
 
   -- Is created by a monitored process
